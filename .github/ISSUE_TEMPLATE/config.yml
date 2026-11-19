@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Contributing guide
+    url: https://github.com/ichidera/slither-bot/blob/main/CONTRIBUTING.md
+    about: Setup, test protocol, invariants, and good first issues.
+  - name: Performance log
+    url: https://github.com/ichidera/slither-bot/blob/main/docs/PERFORMANCE.md
+    about: Measured runs, result states, and known survival blockers.
