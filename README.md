@@ -1,10 +1,10 @@
-# slither-bot
+# Slither.io Bot
 
 A headless Playwright bot for [slither.io](https://slither.io) with a self-contained JavaScript planner injected into the live browser page.
 
 The bot reads the game's own state (`window.slither`, `window.slithers`, `window.foods`, etc.) and writes steering through `window.xm` / `window.ym`. It does not reconstruct the game from pixels or network traffic.
 
-![slither-bot playing](assets/slither_playing.png)
+![Slither.io Bot playing](assets/slither_playing.png)
 
 > **Project status: experimental.**
 > The current focus is **survival**: how long the bot can stay alive in a crowded arena. The longest zero-death run so far is **15 minutes** (length 108, score 2,244). See [Results](#results).

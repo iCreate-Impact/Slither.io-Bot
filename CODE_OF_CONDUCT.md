@@ -2,7 +2,7 @@
 
 ## Our pledge
 
-We want slither-bot to be a welcoming project for anyone who wants to improve
+We want Slither.io Bot to be a welcoming project for anyone who wants to improve
 the planner, measure sessions, write tests, or improve documentation. We pledge
 to make participation harassment-free regardless of age, body size, disability,
 ethnicity, gender identity and expression, level of experience, nationality,

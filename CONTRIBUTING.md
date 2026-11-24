@@ -1,4 +1,4 @@
-# Contributing to slither-bot
+# Contributing to Slither.io Bot
 
 Thanks for taking a look. This project welcomes contributors, and the most valuable help is not only code: reproducible session logs, death recordings, server surveys and focused geometry tests all move the bot forward.
 
@@ -45,8 +45,8 @@ Pull requests like that won't be merged. Using bots may break the game's terms o
 ## Setup
 
 ```bash
-git clone https://github.com/ichidera/slither-bot.git
-cd slither-bot
+git clone https://github.com/ichidera/Slither.io-Bot.git
+cd Slither.io-Bot
 python3 -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
