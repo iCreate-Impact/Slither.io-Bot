@@ -18,7 +18,18 @@ you open slither.io  ->  you press Play  ->  you inject trainer.js
 This is separate from the headless `slither_bot.py` / `bot_v2.js` driver. The
 trainer is self-contained and does not require Python or a build step.
 
-### What is new in v0.2.0
+### What is new in v0.2.1
+
+- Fixed the body-ramming failure: a long snake's body is now collected even
+  when its head is outside the `2,400`-unit threat range.
+- Body points use a bounded nearest-point heap, and the locked hunt target's
+  body is prioritized ahead of a crowded scene's shared body-point budget.
+- The planner, snapshots and radar now use the same prioritized body list, so
+  the trainer cannot plan against an empty body while the radar shows one.
+- Added an offline Playwright regression suite for body crossings, target
+  priority, takeover/input shielding, hunting, radar and FPS.
+
+### v0.2.0 features
 
 - Threat range expanded from `1,200` to `2,400` units, with time-to-collision,
   closest-approach, crowd, wall and faster-chaser detection.
@@ -159,6 +170,12 @@ wall distance, boost state and size. A snake that is moving away or passing wide
 is ignored; a faster snake sitting behind you is treated as a persistent chase
 threat even before it starts closing.
 
+Body points are collected independently of the head distance. A head 2,600
+units away does not hide a body crossing 300 units in front of you. Within the
+body budget, the locked target's body is always planned against first; other
+bodies follow nearest-first. This matters in a crowd, where a long tail or a
+different snake could otherwise consume every available body point.
+
 When hunting is enabled, a target must pass all of these gates:
 
 - It is smaller than you (`85%` of your length by default; **Aggro** raises the
@@ -226,6 +243,33 @@ hunting, or turn **Hunt smaller snakes** off entirely.
 
 ---
 
+## Tests
+
+The offline Playwright suite is in [`tests/`](tests/README.md). It uses the
+installed default browser (Chrome or Edge) and never contacts slither.io. The
+trainer itself still never launches a browser; the harness is test-only.
+
+```bash
+python -m pip install -r panel/trainer/tests/requirements.txt
+python panel/trainer/tests/run_all.py
+```
+
+Use `--headed` to watch a run, or run one suite directly:
+
+```bash
+python panel/trainer/tests/test_modes.py
+python panel/trainer/tests/test_takeover.py
+python panel/trainer/tests/test_hunt_radar.py
+python panel/trainer/tests/bench.py --enemies 24 --segments 140
+```
+
+The closed-loop suite includes `body_far_head`, `body_far_moving`,
+`body_target_last` and `body_many` for the v0.2.1 body fix. See
+[`docs/TRAINER_TESTING.md`](../../docs/TRAINER_TESTING.md) for the root cause,
+test geometry, validation results and live-test checklist.
+
+---
+
 ## Files
 
 | File | Purpose |
@@ -233,6 +277,7 @@ hunting, or turn **Hunt smaller snakes** off entirely.
 | `trainer.js` | Self-contained panel, takeover and planner. Paste this into the DevTools console or serve it as a script. |
 | `trainer.user.js` | Tampermonkey/Greasemonkey loader. Loads `trainer.js` with `@require`. |
 | `bookmarklet.txt` | One-line bookmarklet for a published copy of `trainer.js`. |
+| `tests/` | Offline Playwright scenarios, takeover/UI checks and the FPS benchmark. |
 | `README.md` | This file. |
 
 ---

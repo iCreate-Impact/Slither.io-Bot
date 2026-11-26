@@ -29,7 +29,7 @@
     return;
   }
 
-  var VERSION = '0.2.0';
+  var VERSION = '0.2.1';
   var STORAGE_KEY = 'slitherTrainer.settings.v1';
   var TAU = Math.PI * 2;
 
@@ -254,16 +254,48 @@
     return TUNE.BODY_HALF * sc;
   }
 
+  // Bounded max-heap of body candidates. The heap keeps the closest
+  // THREAT_POINTS points per snake without sorting or retaining the rest.
+  function bodyHeapPush(heap, item) {
+    heap.push(item);
+    var i = heap.length - 1;
+    while (i > 0) {
+      var parent = (i - 1) >> 1;
+      if (heap[parent].d2 >= item.d2) break;
+      heap[i] = heap[parent];
+      i = parent;
+    }
+    heap[i] = item;
+  }
+
+  function bodyHeapReplace(heap, item) {
+    heap[0] = item;
+    var i = 0;
+    for (;;) {
+      var left = i * 2 + 1;
+      var right = left + 1;
+      var largest = i;
+      if (left < heap.length && heap[left].d2 > heap[largest].d2) largest = left;
+      if (right < heap.length && heap[right].d2 > heap[largest].d2) largest = right;
+      if (largest === i) break;
+      var tmp = heap[i];
+      heap[i] = heap[largest];
+      heap[largest] = tmp;
+      i = largest;
+    }
+  }
+
   function collectThreats(me, now) {
     now = now || performance.now();
     var points = [];
     var heads = [];
     var snakes = [];
+    var bodies = {};
+    var bodyNear = {};
     var meId = String(me.id);
     var range = TUNE.THREAT_RANGE;
     var range2 = range * range;
     var bodyRange2 = (range * 1.05) * (range * 1.05);
-    var total = 0;
     var list = Array.isArray(window.slithers) ? window.slithers : [];
     for (var i = 0; i < list.length; i++) {
       var s = list[i];
@@ -273,7 +305,8 @@
       var sy = num(s.yy, NaN);
       if (!isFinite(sx) || !isFinite(sy)) continue;
       var d2 = dist2(sx, sy, me.xx, me.yy);
-      if (d2 > range2) continue;
+      var headNear = d2 <= range2;
+      if (!headNear && !Array.isArray(s.pts)) continue;
 
       // A visible death is the only reliable kill confirmation. It also
       // creates a short-lived feast site, because a large snake drops a lot
@@ -297,47 +330,106 @@
       var speed = Math.max(0, num(s.sp, 0)) * TUNE.SPEED_MULT;
       var boost = !!(s.wmd || s.md) || speed > 300;
       var headR = r + TUNE.HEAD_MARGIN + Math.min(20, speed * 0.045);
-      var head = {
-        x: sx, y: sy, r: headR, head: true, id: s.id,
-        d: Math.sqrt(d2), ang: ang, speed: speed, boost: boost,
-        sct: Math.max(0, num(s.sct, 0)), sc: clamp(num(s.sc, 1), 0.5, 8),
-        s: s
-      };
-      heads.push(head);
-      // The head is also a static obstacle at its current position. The
-      // moving prediction below covers the near future; keeping the current
-      // capsule closes the gap at t=0.
-      points.push({ x: sx, y: sy, r: headR, head: true, id: s.id, hunt: false });
-      snakes.push({
-        id: String(s.id), head: head, d: head.d, sct: head.sct,
-        sc: head.sc, speed: speed, boost: boost, x: sx, y: sy,
-        ang: ang, r: headR, s: s
-      });
+      if (headNear) {
+        var head = {
+          x: sx, y: sy, r: headR, head: true, id: s.id,
+          d: Math.sqrt(d2), ang: ang, speed: speed, boost: boost,
+          sct: Math.max(0, num(s.sct, 0)), sc: clamp(num(s.sc, 1), 0.5, 8),
+          s: s
+        };
+        heads.push(head);
+        // The head is also a static obstacle at its current position. The
+        // moving prediction below covers the near future; keeping the current
+        // capsule closes the gap at t=0.
+        points.push({ x: sx, y: sy, r: headR, head: true, id: s.id, hunt: false });
+        snakes.push({
+          id: String(s.id), head: head, d: head.d, sct: head.sct,
+          sc: head.sc, speed: speed, boost: boost, x: sx, y: sy,
+          ang: ang, r: headR, s: s
+        });
+      }
 
-      // Keep dense, local body points. The first part of the body is
-      // sampled every point, then the stride widens so long snakes still
-      // cover useful distance without blowing the frame budget.
+      // Keep the closest local body points. A long snake can cross the
+      // player while its head is outside the threat radius, so body
+      // collection is independent of head distance. The bounded max-heap
+      // guarantees that the nearest points survive the per-snake budget even
+      // when a long trail coils through the area hundreds of points deep.
       var pts = Array.isArray(s.pts) ? s.pts : [];
-      var added = 0;
-      var stride = 1;
-      for (var j = pts.length - 1; j >= 0 && added < TUNE.THREAT_POINTS && total < TUNE.THREAT_TOTAL; j -= stride) {
+      var heap = [];
+      var nearD2 = Infinity;
+      for (var j = pts.length - 1; j >= 0; j--) {
         var p = pts[j];
         if (!p || p.dying) continue;
         var px = num(p.xx, NaN);
         var py = num(p.yy, NaN);
         if (!isFinite(px) || !isFinite(py)) continue;
-        if (dist2(px, py, me.xx, me.yy) > bodyRange2) {
-          if (added > 12) break;
-          continue;
+        var pd2 = dist2(px, py, me.xx, me.yy);
+        if (pd2 > bodyRange2) continue;
+        if (pd2 < nearD2) nearD2 = pd2;
+        if (heap.length < TUNE.THREAT_POINTS) {
+          bodyHeapPush(heap, { x: px, y: py, d2: pd2 });
+        } else if (pd2 < heap[0].d2) {
+          bodyHeapReplace(heap, { x: px, y: py, d2: pd2 });
         }
-        points.push({ x: px, y: py, r: r + 3, head: false, id: s.id, hunt: false });
-        added++;
-        total++;
-        if (added === 32) stride = 2;
-        else if (added === 50) stride = 3;
+      }
+      if (heap.length) {
+        heap.sort(function (a, b) { return a.d2 - b.d2; });
+        var body = [];
+        for (var k = 0; k < heap.length; k++) {
+          body.push({
+            x: heap[k].x, y: heap[k].y, r: r + 3,
+            head: false, id: s.id, hunt: false
+          });
+        }
+        var key = String(s.id);
+        bodies[key] = body;
+        bodyNear[key] = nearD2;
       }
     }
-    return { points: points, heads: heads, snakes: snakes };
+    return {
+      points: points,
+      headPoints: points,
+      heads: heads,
+      snakes: snakes,
+      bodies: bodies,
+      bodyNear: bodyNear
+    };
+  }
+
+  // Build the body obstacle list for one planner tick. The selected target
+  // gets its body points first, then the remaining bodies are added nearest
+  // first. This prevents a crowded scene from silently dropping the body of
+  // the snake the planner is actually hunting.
+  function buildBodyPoints(threats, targetId) {
+    var out = [];
+    var ids = [];
+    var seen = {};
+    var id;
+    if (targetId !== null && targetId !== undefined && threats.bodies[targetId]) {
+      ids.push(targetId);
+      seen[targetId] = true;
+    }
+    var rest = [];
+    for (id in threats.bodies) {
+      if (!Object.prototype.hasOwnProperty.call(threats.bodies, id)) continue;
+      if (seen[id]) continue;
+      rest.push(id);
+    }
+    rest.sort(function (a, b) {
+      var da = threats.bodyNear[a];
+      var db = threats.bodyNear[b];
+      if (da === undefined) da = Infinity;
+      if (db === undefined) db = Infinity;
+      return da - db;
+    });
+    ids = ids.concat(rest);
+    for (var i = 0; i < ids.length && out.length < TUNE.THREAT_TOTAL; i++) {
+      var body = threats.bodies[ids[i]];
+      for (var j = 0; j < body.length && out.length < TUNE.THREAT_TOTAL; j++) {
+        out.push(body[j]);
+      }
+    }
+    return out;
   }
 
   function collectSelfBody(me) {
@@ -924,8 +1016,13 @@
     }
 
     var targetKey = target ? String(target.id) : null;
+    var bodyPoints = buildBodyPoints(threats, targetKey);
+    threats.bodyPoints = bodyPoints;
     for (i = 0; i < threats.points.length; i++) {
       threats.points[i].hunt = !!targetKey && String(threats.points[i].id) === targetKey;
+    }
+    for (i = 0; i < bodyPoints.length; i++) {
+      bodyPoints[i].hunt = !!targetKey && String(bodyPoints[i].id) === targetKey;
     }
     for (i = 0; i < threats.heads.length; i++) {
       threats.heads[i].hunt = !!targetKey && String(threats.heads[i].id) === targetKey;
@@ -962,7 +1059,7 @@
     }
 
     var ctx = {
-      obstacles: threats.points.concat(selfBody),
+      obstacles: threats.points.concat(bodyPoints, selfBody),
       heads: threats.heads,
       foods: foods,
       arena: arena,
@@ -1137,10 +1234,7 @@
         sct: h.sct, sc: h.sc, r: h.r, d: h.d, id: h.id, hunt: !!h.hunt
       });
     }
-    var bodyPoints = [];
-    for (var b = 0; b < threats.points.length && bodyPoints.length < 460; b++) {
-      if (!threats.points[b].head) bodyPoints.push(threats.points[b]);
-    }
+    var bodyPoints = (threats.bodyPoints || []).slice(0, 460);
     return {
       me: { x: num(me.xx, 0), y: num(me.yy, 0), ang: num(me.ang, 0) },
       arena: arena,
@@ -1184,6 +1278,7 @@
   function sampleSnapshot(me, now) {
     var arena = arenaInfo();
     var threats = collectThreats(me, now);
+    threats.bodyPoints = buildBodyPoints(threats, null);
     var selfBody = collectSelfBody(me);
     var foods = collectFoods(me, Math.max(TUNE.FOOD_RANGE, state.settings.radarRange),
       TUNE.FOOD_RADAR_POINTS);
