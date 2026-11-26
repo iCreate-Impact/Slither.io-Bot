@@ -26,6 +26,15 @@ python -m playwright install chromium
 
 ```bash
 python panel/trainer/tests/run_all.py
+
+# Force the full suite through Edge
+TRAINER_BROWSER=msedge python panel/trainer/tests/run_all.py
+```
+
+On PowerShell, set the environment variable first:
+
+```powershell
+$env:TRAINER_BROWSER='msedge'; python panel/trainer/tests/run_all.py
 ```
 
 `--headed` shows the browser. `--quick` cuts the closed-loop scenarios to four
@@ -73,16 +82,16 @@ collisions and roughly 200 units of minimum enemy clearance.
 
 ## Reference result
 
-Validated on Windows with Playwright 1.59.0, the installed default Chrome
-channel (Chrome 155), and headless mode:
+Validated on Windows with Playwright 1.59.0, headless mode, using the installed
+Chrome 155 channel and Edge 158.0.4370.45:
 
 ```text
-test_modes.py       18/18 modes passed
-test_takeover.py    29/29 checks passed
-test_hunt_radar.py  37/37 checks passed
-bench.py             60 fps, 5 enemies x 120 points
+test_modes.py       18/18 modes passed (Chrome and Edge)
+test_takeover.py    29/29 checks passed (Chrome and Edge)
+test_hunt_radar.py  37/37 checks passed (Chrome and Edge)
+bench.py             60 fps, 5 enemies x 120 points (Chrome and Edge)
 bench.py --enemies 24 --segments 140
-                     60 fps, 24 enemies x 140 points
+                     60 fps, 24 enemies x 140 points (Chrome and Edge)
 ```
 
 Console and page errors are treated as failures. The closed-loop suite also
@@ -94,7 +103,9 @@ takeover.
 These are geometry and UI tests, not a replacement for a live run. The mock
 pages approximate the client's trail, turn, speed and collision model, but they
 do not reproduce server latency, other players' decisions, anti-cheat, or the
-live server's exact collision resolution. Run a short manual live session before
-publishing a trainer change. See
+live server's exact collision resolution. A live head-on chase against a faster
+or larger player can still end a run; these tests prove the body-ramming
+regression, not invincibility. Run a short manual live session before publishing
+a trainer change. See
 [`docs/TRAINER_TESTING.md`](../../../docs/TRAINER_TESTING.md) for the full test
-protocol and root-cause notes.
+protocol, live Edge results and screenshots.

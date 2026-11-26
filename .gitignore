@@ -12,6 +12,10 @@ playwright-report/
 test-results/
 .playwright/
 
+# Playwright run snapshots and traces (screenshots stay tracked)
+assets/page-*.yml
+assets/*death_log*.json
+
 # Local logs and editor/OS files
 *.log
 *.tmp

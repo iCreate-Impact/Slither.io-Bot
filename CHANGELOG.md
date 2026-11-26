@@ -42,18 +42,23 @@ Results are per-run displayed scores, not cumulative across restarts. See [docs/
 - Trainer takeover suite: 29/29 checks passed.
 - Trainer hunt/radar/UI suite: 37/37 checks passed.
 - Trainer benchmark: 60 fps with five enemies x 120 points, and 60 fps with
-  24 enemies x 140 points, using Playwright 1.59.0 and installed Chrome 155.
-- Short live probe: a one-off Playwright probe started a run, injected the
-  v0.2.1 trainer and took over for about 21 seconds. No death; stayed clear of
-  nearby bodies; no trainer page errors. The game logged IPv6
-  WebSocket fallback errors during server selection. Release returned to idle
-  with zero play clicks. The production trainer did not start the run. This was
-  not a substitute for a full live run.
+  24 enemies x 140 points, using Playwright 1.59.0 with Chrome 155 and Edge
+  158.0.4370.45.
+- Live Edge run: the test harness started a run with the nickname `test`,
+  injected v0.2.1 and took over. The first run reached length 213 and ended; the
+  trainer stopped control, waited for a user-started run and did not click
+  **Play Again**. An instrumented follow-up died in a head-on chase, not a
+  head-far body crossing; the trainer was already escaping and stopped on
+  death. A later run was released while alive and returned to manual control.
+  The production trainer did not start any run. The game logged IPv6 WebSocket
+  fallback errors during server selection; those were not trainer errors.
 
 ### Known limitations
 
 - The offline mock does not reproduce live server collision resolution or
   latency. A short live test is still required before publishing.
+- A live head-on chase against a faster or larger player can still end a run.
+  v0.2.1 fixes body visibility, not every possible collision.
 - A body with more than 64 sampled points inside the 2,520-unit body range
   keeps only its 64 closest points. Points farther along the same body can be
   omitted; the target body is prioritized and the closest crossing is retained.

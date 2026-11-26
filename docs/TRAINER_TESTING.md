@@ -85,8 +85,8 @@ sees and what the UI shows cannot diverge.
 The body-point cap remains bounded (`THREAT_POINTS = 64` per snake,
 `THREAT_TOTAL = 460` overall), and the bounded nearest-point heap keeps the
 per-frame cost flat enough for the existing 60 fps target. A 24-snake,
-140-point-per-snake benchmark still measured 60 fps in the installed Chrome
-channel.
+140-point-per-snake benchmark still measured 60 fps in both the installed
+Chrome and Edge channels.
 
 ---
 
@@ -106,6 +106,18 @@ fallback needs `python -m playwright install chromium`.
 ```bash
 python -m pip install -r panel/trainer/tests/requirements.txt
 python panel/trainer/tests/run_all.py
+```
+
+To force the full suite through Edge:
+
+```bash
+TRAINER_BROWSER=msedge python panel/trainer/tests/run_all.py
+```
+
+On PowerShell:
+
+```powershell
+$env:TRAINER_BROWSER='msedge'; python panel/trainer/tests/run_all.py
 ```
 
 Individual suites:
@@ -137,41 +149,68 @@ a simulated collision, non-positive wall clearance, or missing takeover.
 
 ## Validation results
 
-Reference environment: Windows, Playwright 1.59.0, installed default Chrome
-channel (Chrome 155), headless mode.
+Reference environment: Windows, Playwright 1.59.0, headless mode. The suite was
+run with the installed Chrome 155 channel and rerun with Edge 158.0.4370.45.
 
 ```text
-test_modes.py       18/18 modes passed
-test_takeover.py    29/29 checks passed
-test_hunt_radar.py  37/37 checks passed
-bench.py            60 fps, 5 enemies x 120 points
+test_modes.py       18/18 modes passed (Chrome and Edge)
+test_takeover.py    29/29 checks passed (Chrome and Edge)
+test_hunt_radar.py  37/37 checks passed (Chrome and Edge)
+bench.py            60 fps, 5 enemies x 120 points (Chrome and Edge)
 bench.py --enemies 24 --segments 140
-                    60 fps, 24 enemies x 140 points
+                    60 fps, 24 enemies x 140 points (Chrome and Edge)
 ```
 
-Representative body minima from one full run:
+Representative body minima from the Edge run:
 
 | Scenario | Simulated frames | Collisions | Minimum enemy distance |
 | --- | ---: | ---: | ---: |
-| `body_far_head` | 500 | 0 | 200.5 |
+| `body_far_head` | 501 | 0 | 202.0 |
 | `body_far_moving` | 500 | 0 | 220.8 |
-| `body_target_last` | 501 | 0 | 113.8 |
-| `body_many` | 500 | 0 | 401.3 |
+| `body_target_last` | 500 | 0 | 112.8 |
+| `body_many` | 500 | 0 | 401.2 |
 
 The mock collision radius is the sum of the two body radii. The planner uses an
 additional safety margin, so these minima are not the actual collision
 threshold.
 
-A short live probe was also run on 2026-11-26 against slither.io. A one-off
-Playwright probe started a run, injected the final v0.2.1 trainer, and clicked
-**Take over**; the production trainer did not start the run. Takeover was active
-for about 21 seconds. The snake survived, stayed clear of nearby bodies, and
-there were no trainer page errors. The game itself logged
-IPv6 WebSocket fallback failures while choosing a server; those were not trainer
-errors. The snake was too small to qualify a hunt target during that probe.
-Release returned the panel to idle and did not click **Play Again** (zero play
-clicks). This is a smoke check only; live server latency and other players
-cannot be made deterministic in this suite.
+### Live Edge run
+
+On 2026-11-26 a live run was made with the test harness in headless Edge. The
+harness set the nickname to `test`, started the run, injected `trainer.js`
+v0.2.1, and clicked **Take over**. The production trainer did not start the run
+or click **Play Again**.
+
+- Takeover started immediately. The panel reported v0.2.1, 60 fps, live threats
+  and radar points.
+- The first run reached length 213 before ending. The trainer stopped control,
+  the panel showed `Waiting for a run — start it yourself`, and it did not click
+  **Play Again**.
+- An instrumented follow-up captured a fatal **head-on chase**, not a head-far
+  body crossing. The nearest enemy head closed from 314 to 28 units in about
+  2.7 seconds; the trainer was already in `escape`. In the last pre-death
+  sample the nearest head was 28 units away and the nearest body was 48,
+  consistent with a head-on hit rather than a body crossing. The death stopped
+  takeover and left re-arm available.
+- A later short run was released while still alive. The panel returned to
+  `Run live — trainer idle`, the game kept playing, and the snake remained under
+  manual control.
+
+The game itself logged IPv6 WebSocket fallback failures while choosing a server;
+those were not trainer errors. Live server latency, other players' steering and
+head-on chases remain non-deterministic; the offline body scenarios are the
+deterministic check for the ramming fix.
+
+### Live screenshots
+
+| Screenshot | What it shows |
+| --- | --- |
+| [`assets/trainer_edge_start.png`](../assets/trainer_edge_start.png) | Nickname `test`; trainer idle before the harness starts the run. |
+| [`assets/trainer_edge_takeover.png`](../assets/trainer_edge_takeover.png) | Takeover active with the v0.2.1 panel and radar. |
+| [`assets/trainer_edge_live.png`](../assets/trainer_edge_live.png) | Live steering at length 192; threat count, clearance and radar are visible. |
+| [`assets/trainer_edge_after_death.png`](../assets/trainer_edge_after_death.png) | First run ended at length 213; the trainer waits and does not click **Play Again**. |
+| [`assets/trainer_edge_after_death_rearmed.png`](../assets/trainer_edge_after_death_rearmed.png) | Later death at length 159 with re-arm enabled; the panel stays armed. |
+| [`assets/trainer_edge_release_live.png`](../assets/trainer_edge_release_live.png) | Release while the snake is alive: panel idle, game still playing. |
 
 ---
 
@@ -202,7 +241,8 @@ offline pages cannot reproduce the live server:
   omitted, but the nearest crossing is retained; the target body is also
   prioritized first in the shared budget.
 - The test suite is offline by default. The live probe is one-off and
-  non-deterministic.
+  non-deterministic. A live head-on chase against a faster or larger player can
+  still end a run; v0.2.1 fixes body visibility, not every possible collision.
 - Bots may violate the game's terms of service. Use the trainer sparingly and
   only on a run you started yourself.
 

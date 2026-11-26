@@ -252,6 +252,9 @@ trainer itself still never launches a browser; the harness is test-only.
 ```bash
 python -m pip install -r panel/trainer/tests/requirements.txt
 python panel/trainer/tests/run_all.py
+
+# Force the suite through Edge
+TRAINER_BROWSER=msedge python panel/trainer/tests/run_all.py
 ```
 
 Use `--headed` to watch a run, or run one suite directly:
