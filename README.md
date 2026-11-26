@@ -91,7 +91,10 @@ python tools/sync_embedded.py --check
 `panel/trainer/` injects a control panel into a slither.io tab you already have
 open. It takes over the snake in that live session instead of launching a new
 browser or creating a new run. Start the run yourself, inject the panel, then
-click **Take over**. See [panel/trainer/README.md](panel/trainer/README.md).
+click **Take over**. v0.2.0 adds a 2,400-unit threat radar, time-to-collision and
+faster-chaser evasion, smaller-snake hunting with chase/cut/coil maneuvers,
+corpse feasts, and tunable safety, aggression and radar controls. See
+[panel/trainer/README.md](panel/trainer/README.md).
 
 ### Server probing
 

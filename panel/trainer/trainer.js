@@ -40,6 +40,7 @@
     HORIZON: 1.4,          // rollout seconds
     STEPS: 15,             // rollout samples
     CONTROL_LAG: 0.24,     // server/control delay before a new turn applies
+    EMERGENCY_LAG: 0.04,   // panic turn when a head-on collision is imminent
     TURN_RATE: 4.125,      // rad/s, matches the client's base turn rate
     SPEED_MULT: 31.25,     // world units/s per sp unit
     SPEED_MIN: 120,
@@ -55,6 +56,7 @@
     HEAD_MARGIN: 26,
     HEAD_TURN_RATE: 2.2,   // how fast an enemy is assumed to turn at us
     HEAD_PREDICT: 0.42,    // seconds of enemy-head motion used by the rollout
+    HUNT_HEAD_TURN: 0.6,   // target noses are assumed to keep their line longer
     HEAD_WEIGHT: 2.2,      // clearance reward for keeping away from a nose
     ESCAPE_BIAS: 20,       // directional nudge toward the committed escape line
     SELF_SKIP: 95,         // do not treat our own neck as an obstacle
@@ -81,14 +83,17 @@
     RADAR_RANGE: 2000,
     HUNT_MIN_LEN: 18,
     HUNT_MAX_RATIO: 0.85,
-    HUNT_MIN_DIST: 140,
+    HUNT_MIN_DIST: 90,
     HUNT_MAX_DIST: 760,
     HUNT_CROWD_RADIUS: 520,
-    HUNT_MAX_CROWD: 2,
+    HUNT_MAX_CROWD: 1,
     HUNT_LOCK_MS: 3200,
     HUNT_STANDOFF: 90,
-    HUNT_BONUS: 50,
+    HUNT_BONUS: 90,
+    CHASE_BONUS: 220,
     HUNT_BODY_BONUS: 65,
+    HUNT_FOOD_SCALE: 0.35,
+    HUNT_CLEAR_CAP: 26,
     SAFE_BONUS: 2000,
     UNSAFE_PENALTY: 2000
   };
@@ -306,7 +311,7 @@
       snakes.push({
         id: String(s.id), head: head, d: head.d, sct: head.sct,
         sc: head.sc, speed: speed, boost: boost, x: sx, y: sy,
-        ang: ang, s: s
+        ang: ang, r: headR, s: s
       });
 
       // Keep dense, local body points. The first part of the body is
@@ -584,7 +589,7 @@
         best = {
           id: s.id, head: s.head, d: s.d, sct: s.sct, sc: s.sc,
           speed: s.speed, boost: s.boost, x: s.x, y: s.y, ang: s.ang,
-          s: s.s, score: score
+          r: s.head.r, s: s.s, score: score
         };
       }
     }
@@ -602,7 +607,7 @@
   function evaluatePath(me, targetHeading, ctx) {
     var steps = TUNE.STEPS;
     var dt = TUNE.HORIZON / steps;
-    var lagSteps = TUNE.CONTROL_LAG / dt;
+    var lagSteps = (ctx.emergency ? TUNE.EMERGENCY_LAG : TUNE.CONTROL_LAG) / dt;
     var turnRate = TUNE.TURN_RATE *
       clamp(num(me.scang, 1), 0.13, 1.2) *
       clamp(num(me.spang, 1), 0.7, 1.25);
@@ -643,7 +648,14 @@
         if (clear < 0) score += clear * 70 * early;
         else {
           var ow = o.hunt ? 0.30 : 1;
-          score += Math.min(clear, 150) * 2.1 * ow * early;
+          var clearCap = o.hunt ? TUNE.HUNT_CLEAR_CAP : 150;
+          score += Math.min(clear, clearCap) * 2.1 * ow * early;
+        }
+        // A hunt must not buy a cut with a scrape. The capped reward above
+        // keeps target avoidance from dominating, but below the normal
+        // danger margin the target becomes a hard safety constraint again.
+        if (o.hunt && clear < TUNE.DANGER_CLEAR) {
+          score -= (TUNE.DANGER_CLEAR - clear) * 220 * early;
         }
       }
 
@@ -660,8 +672,9 @@
         var ha = hd.ang;
         if (hd.d < 900 && predT > 0.05) {
           var toMe = Math.atan2(me.yy - hd.y, me.xx - hd.x);
+          var headTurn = hd.hunt ? TUNE.HUNT_HEAD_TURN : TUNE.HEAD_TURN_RATE;
           ha += clamp(angleDiff(toMe, hd.ang),
-            -TUNE.HEAD_TURN_RATE * predT, TUNE.HEAD_TURN_RATE * predT);
+            -headTurn * predT, headTurn * predT);
         }
         var hx = hd.x + Math.cos(ha) * hd.speed * predT;
         var hy = hd.y + Math.sin(ha) * hd.speed * predT;
@@ -670,7 +683,11 @@
         if (hClear < 0) score += hClear * 80 * early;
         else {
           var hw = hd.hunt ? 0.55 : TUNE.HEAD_WEIGHT;
-          score += Math.min(hClear, 140) * hw * early;
+          var hCap = hd.hunt ? TUNE.HUNT_CLEAR_CAP : 140;
+          score += Math.min(hClear, hCap) * hw * early;
+        }
+        if (hd.hunt && hClear < TUNE.DANGER_CLEAR) {
+          score -= (TUNE.DANGER_CLEAR - hClear) * 160 * early;
         }
       }
 
@@ -706,7 +723,8 @@
         }
       }
       foodScore *= state.settings.foodPull;
-      score += foodScore * TUNE.FOOD_WEIGHT;
+      var foodScale = ctx.huntTarget ? TUNE.HUNT_FOOD_SCALE : 1;
+      score += foodScore * TUNE.FOOD_WEIGHT * foodScale;
 
       // A lane bonus makes distant food visible to the planner instead of
       // only rewarding food that happens to be within reach of the rollout.
@@ -720,7 +738,7 @@
         if (align > 0.2) lane += lfood.w * align * (1 - lfd / TUNE.FOOD_RANGE);
       }
       lane *= state.settings.foodPull;
-      score += lane * TUNE.FOOD_LANE_WEIGHT;
+      score += lane * TUNE.FOOD_LANE_WEIGHT * foodScale;
       foodScore += lane;
     }
 
@@ -738,6 +756,17 @@
       if (ctx.maneuver === 'cut') {
         desiredHunt = htAng + ctx.huntSide * Math.PI / 2;
         desiredHunt = angleBlend(desiredHunt, toT, clamp((td - 260) / 600, 0, 0.45));
+      } else if (ctx.maneuver === 'chase') {
+        // A slower snake running away leaves its body directly in our path.
+        // Aim for a lead point beside its nose so we overtake alongside it
+        // instead of rear-ending its tail, then cut across when we are ahead.
+        var chaseLead = clamp(td / Math.max(180, ctx.speed + htSpeed), 0.25, 1.6);
+        var sideOff = ht.r + selfR + safety + 30;
+        var chaseX = htX + Math.cos(htAng) * htSpeed * chaseLead -
+          Math.sin(htAng) * sideOff * ctx.huntSide;
+        var chaseY = htY + Math.sin(htAng) * htSpeed * chaseLead +
+          Math.cos(htAng) * sideOff * ctx.huntSide;
+        desiredHunt = Math.atan2(chaseY - me.yy, chaseX - me.xx);
       } else if (ctx.maneuver === 'coil') {
         var ux = Math.cos(toT);
         var uy = Math.sin(toT);
@@ -752,7 +781,8 @@
         desiredHunt = Math.atan2(leadY - me.yy, leadX - me.xx);
       }
       var huntAlign = Math.cos(angleDiff(targetHeading, desiredHunt));
-      huntScore += huntAlign * TUNE.HUNT_BONUS * ctx.aggression;
+      var huntBonus = ctx.maneuver === 'chase' ? TUNE.CHASE_BONUS : TUNE.HUNT_BONUS;
+      huntScore += huntAlign * huntBonus * ctx.aggression;
 
       var endX = path[path.length - 2];
       var endY = path[path.length - 1];
@@ -862,10 +892,25 @@
       } else {
         var toT = Math.atan2(target.y - me.yy, target.x - me.xx);
         var facing = Math.cos(angleDiff(target.ang, toT));
-        if (target.d < 400 && facing < -0.1) target.maneuver = 'cut';
+        var along = (target.x - me.xx) * Math.cos(target.ang) +
+          (target.y - me.yy) * Math.sin(target.ang);
+        if (target.d < 340 && along < -30) target.maneuver = 'cut';
+        else if (target.d < 420 && facing < -0.1) target.maneuver = 'cut';
+        else if (facing > 0.3) target.maneuver = 'chase';
         else if (target.d < 460) target.maneuver = 'coil';
         else target.maneuver = 'hunt';
         target.huntSide = chooseHuntSide(me, target, arena, threats.heads);
+        var fromTarget = Math.atan2(me.yy - target.y, me.xx - target.x);
+        var lateral = Math.sin(angleDiff(fromTarget, target.ang));
+        if (target.maneuver === 'chase') {
+          // Approach from the side we are already on. Aiming across the
+          // target's body makes the planner treat its own tail as a wall and
+          // settle into a parallel chase that never closes the distance.
+          if (Math.abs(lateral) > 0.15) target.huntSide = lateral > 0 ? 1 : -1;
+        } else if (target.maneuver === 'cut' && Math.abs(lateral) > 0.15) {
+          // Cross toward the target's path, not away from it.
+          target.huntSide = lateral > 0 ? -1 : 1;
+        }
         state.huntTarget = target;
       }
     }
@@ -930,6 +975,7 @@
       huntSide: target ? target.huntSide : 1,
       aggression: clamp(num(state.settings.aggression, 1), 0, 2),
       escape: modeDanger.urgent || modeDanger.level > 0.55,
+      emergency: !!(danger.urgent && danger.nearest && danger.nearest.d < 340),
       danger: modeDanger,
       nearest: modeDanger.nearest || danger.nearest,
       evadeHeading: evadeHeading
@@ -1091,12 +1137,16 @@
         sct: h.sct, sc: h.sc, r: h.r, d: h.d, id: h.id, hunt: !!h.hunt
       });
     }
+    var bodyPoints = [];
+    for (var b = 0; b < threats.points.length && bodyPoints.length < 460; b++) {
+      if (!threats.points[b].head) bodyPoints.push(threats.points[b]);
+    }
     return {
       me: { x: num(me.xx, 0), y: num(me.yy, 0), ang: num(me.ang, 0) },
       arena: arena,
       heading: heading,
       path: plan && plan.path ? plan.path.slice(0, 80) : [],
-      threats: threats.points.slice(0, 460),
+      threats: bodyPoints,
       heads: heads,
       selfBody: selfBody ? selfBody.slice(0, 120) : [],
       foods: foods.slice(0, TUNE.FOOD_RADAR_POINTS),
@@ -1137,6 +1187,7 @@
     var selfBody = collectSelfBody(me);
     var foods = collectFoods(me, Math.max(TUNE.FOOD_RANGE, state.settings.radarRange),
       TUNE.FOOD_RADAR_POINTS);
+    if (state.corpse && now >= state.corpse.until) state.corpse = null;
     var danger = assessDanger(me, threats, arena);
     state.danger = danger.level;
     state.nearest = danger.nearest;
@@ -2029,6 +2080,7 @@
       toggle: toggleTakeover,
       planner: {
         choosePlan: choosePlan,
+        evaluatePath: evaluatePath,
         collectThreats: collectThreats,
         collectSelfBody: collectSelfBody,
         collectFoods: collectFoods,

@@ -11,6 +11,8 @@ Results are per-run displayed scores, not cumulative across restarts. See [docs/
 ### Added
 
 - **Browser trainer panel (`panel/trainer/`):** inject a control panel into an existing slither.io tab and take over the snake that is already on screen. It never launches a browser, navigates, clicks Play, reconnects, or creates a new run. Includes a Tampermonkey loader, a bookmarklet, hotkeys, a local radar, and a self-contained live-state planner.
+- **Trainer v0.2.0 hunting and radar:** threat range expanded to 2,400 units with time-to-collision, closest-approach, crowd, wall and persistent faster-chaser detection; lead-intercept hunting with chase, coil, cut-across and body-trap maneuvers for smaller isolated snakes; corpse/feast detection from kills or dense big-pellet clusters; target locking, hunt-aware food weighting, and gated cut-off boost.
+- **Trainer radar and controls:** 800–2,400 unit radar range slider, hunt toggle, aggression slider, target/feast overlays, and an emergency 40 ms panic turn for urgent head-on threats.
 - **Self-body collision modeling:** above `SELF_COLLISION_MIN_LEN = 140`, the visible own-body trail is inserted into the planner grid with neck skipping, cumulative trail arc, tail-death expiry and a 120-segment cap.
 - **Future-path self check:** candidates whose own rollout loops back within two body radii of an older self point are rejected. Active at length 140+.
 - **Per-target reaction lag:** predicted enemy headings are held for roughly 0.05 s for fast tiny boosters and 0.09 to 0.11 s for ordinary and long snakes.
@@ -33,6 +35,10 @@ Results are per-run displayed scores, not cumulative across restarts. See [docs/
 
 ### Validated
 
+- Trainer v0.2.0 closed-loop scenarios: `walls`, `wall`, `headon`, `cross`, `behind`, `hunt`, `hunt_cut`, `hunt_far`, `hunt_kill`, `hunt_flee`, `hunt_bigger`, `hunt_crowd`, `feast` and `radar` all survived 10 s with zero self-collisions; hunting scenarios scored kills.
+- Trainer smoke suite: 29/29 checks passed, including takeover/release, handler restoration, input shielding, death handling and auto-rearm.
+- Trainer behavior/UI suite: 37/37 checks passed, including chase/cut kills, corpse feasts, larger-snake and crowd rejection, radar range, and panel controls.
+- Trainer benchmark: 60 fps with five large enemy snakes and 120 body points each.
 - Lowered-threshold self-grid test: `[SELFGRID] len=8 segs=5 stride=1 body=235 skip=95`. Grid insertion and tail expiry were exercised.
 - Path-self geometry tests: straight, 90°, 180° and 270° candidate turns kept positive self-clearance.
 - Test 58: 4 min, 0 deaths, length 39, score 647, 1 kill.
