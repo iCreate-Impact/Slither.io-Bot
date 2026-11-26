@@ -60,6 +60,34 @@
     enemies = [makeEnemy(2, 16384 + 300, 16384, Math.PI / 2, 5.5, 100)];
   } else if (mode === "behind") {
     enemies = [makeEnemy(2, 16384 - 700, 16384, 0, 6.2, 100)];
+  } else if (mode === "behind_boost") {
+    // The live failure shape: a longer snake boosts up from behind. Running
+    // straight is not enough because its boost speed matches ours.
+    selfMax = 60;
+    self.sct = 60;
+    enemies = [makeEnemy(2, 16384 - 700, 16384, 0, 13.76, 100)];
+  } else if (mode === "behind_boost_short") {
+    selfMax = 16;
+    self.sct = 16;
+    enemies = [makeEnemy(2, 16384 - 700, 16384, 0, 13.76, 100)];
+  } else if (mode === "headon_boost") {
+    // A larger boosting snake runs straight at a short player. The player
+    // must be able to boost out of the way even before the old 12-length gate.
+    selfMax = 11;
+    self.sct = 11;
+    enemies = [makeEnemy(2, 16384 + 700, 16384, Math.PI, 13.76, 100)];
+  } else if (mode === "headon_boost_short") {
+    // The online spawn is length 2 and can be crowded immediately. A short
+    // player still needs a panic boost when a larger snake is bearing down.
+    selfMax = 3;
+    self.sct = 3;
+    enemies = [makeEnemy(2, 16384 + 700, 16384, Math.PI, 13.76, 100)];
+  } else if (mode === "headon_fast") {
+    // A faster but non-boosting snake. This is the live failure shape:
+    // running directly away keeps the player inside the chaser's line.
+    selfMax = 40;
+    self.sct = 40;
+    enemies = [makeEnemy(2, 16384 + 700, 16384, Math.PI, 8.5, 100)];
   } else if (mode === "hunt") {
     selfMax = 60;
     self.sct = 60;
@@ -84,6 +112,22 @@
     var runner = makeEnemy(2, 16384 + 320, 16384, 0, 4.2, 20);
     runner.noHome = true;
     enemies = [runner];
+  } else if (mode === "hunt_early") {
+    // Early-game prey. The trainer used to wait until length 18 before it
+    // would hunt at all, which leaves a lot of free growth on the table.
+    selfMax = 12;
+    self.sct = 12;
+    var earlyPrey = makeEnemy(2, 16384 + 330, 16384 + 20, Math.PI / 2, 4.6, 8);
+    earlyPrey.noHome = true;
+    enemies = [earlyPrey];
+  } else if (mode === "hunt_peer") {
+    // A near-peer target is outside the old 0.85 ratio gate but still a
+    // legitimate body-trap kill for an aggressive player.
+    selfMax = 60;
+    self.sct = 60;
+    var peerPrey = makeEnemy(2, 16384 + 330, 16384 + 20, Math.PI / 2, 4.8, 52);
+    peerPrey.noHome = true;
+    enemies = [peerPrey];
   } else if (mode === "hunt_bigger") {
     selfMax = 40;
     self.sct = 40;

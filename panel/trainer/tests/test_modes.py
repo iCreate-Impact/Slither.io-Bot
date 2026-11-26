@@ -26,13 +26,19 @@ DEFAULT_MODES = [
     "walls",
     "wall",
     "headon",
+    "headon_boost",
+    "headon_fast",
     "cross",
     "behind",
+    "behind_boost",
+    "behind_boost_short",
     "hunt",
     "hunt_cut",
     "hunt_far",
     "hunt_kill",
     "hunt_flee",
+    "hunt_early",
+    "hunt_peer",
     "hunt_bigger",
     "hunt_crowd",
     "body_far_head",
@@ -77,7 +83,10 @@ def main() -> int:
                     "() => document.getElementById('slither-trainer-host')"
                     ".shadowRoot.getElementById('takeBtn').click()"
                 )
-                page.wait_for_timeout(int(args.seconds * 1000))
+                # Early/peer chases need enough time to close a 300+ unit gap
+                # without a cut boost; keep the rest of the suite fast.
+                seconds = max(args.seconds, 12.0) if mode in ("hunt_early", "hunt_peer") else args.seconds
+                page.wait_for_timeout(int(seconds * 1000))
                 info = page.evaluate(
                     """() => ({
                       sim: window.__sim,
@@ -116,6 +125,8 @@ def main() -> int:
                         and info["state"]["target"] is not None
                         and info["state"]["target"] in info["state"]["bodyIds"]
                     )
+                if mode in ("hunt_early", "hunt_peer"):
+                    ok = ok and info["sim"].get("kills", 0) >= 1
                 results.append((mode, ok, info, errors))
                 print(
                     ("PASS" if ok else "FAIL"),

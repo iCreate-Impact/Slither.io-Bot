@@ -29,7 +29,7 @@
     return;
   }
 
-  var VERSION = '0.2.1';
+  var VERSION = '0.3.0';
   var STORAGE_KEY = 'slitherTrainer.settings.v1';
   var TAU = Math.PI * 2;
 
@@ -58,41 +58,43 @@
     HEAD_PREDICT: 0.42,    // seconds of enemy-head motion used by the rollout
     HUNT_HEAD_TURN: 0.6,   // target noses are assumed to keep their line longer
     HEAD_WEIGHT: 2.2,      // clearance reward for keeping away from a nose
-    ESCAPE_BIAS: 20,       // directional nudge toward the committed escape line
+    ESCAPE_BIAS: 28,       // directional nudge toward the committed escape line
     SELF_SKIP: 95,         // do not treat our own neck as an obstacle
     SELF_POINTS: 120,      // local self body points kept
     BODY_HALF: 14.5,       // rendered half-width at sc = 1
     WALL_MARGIN: 360,
     WALL_HARD: 80,
-    FOOD_RANGE: 900,
-    FOOD_REACH: 280,
-    FOOD_POINTS: 48,
-    FOOD_RADAR_POINTS: 90,
-    FOOD_WEIGHT: 18,
-    FOOD_LANE_WEIGHT: 7,
-    CORPSE_RADIUS: 280,
-    CORPSE_MS: 10000,
-    CORPSE_WEIGHT: 8,
+    FOOD_RANGE: 1100,
+    FOOD_REACH: 320,
+    FOOD_POINTS: 64,
+    FOOD_RADAR_POINTS: 110,
+    FOOD_WEIGHT: 20,
+    FOOD_LANE_WEIGHT: 9,
+    CORPSE_RADIUS: 320,
+    CORPSE_MS: 12000,
+    CORPSE_WEIGHT: 10,
     DANGER_CLEAR: 18,
-    BOOST_CLEAR: 10,
-    BOOST_MS: 340,
-    BOOST_COOLDOWN: 1300,
-    CUT_BOOST_MS: 260,
-    CUT_BOOST_COOLDOWN: 4200,
+    BOOST_CLEAR: 12,
+    BOOST_MS: 800,
+    BOOST_COOLDOWN: 350,
+    CUT_BOOST_MS: 300,
+    CUT_BOOST_COOLDOWN: 3400,
+    CHASE_BOOST_MS: 280,
+    CHASE_BOOST_COOLDOWN: 2600,
     PREV_BONUS: 10,
-    RADAR_RANGE: 2000,
-    HUNT_MIN_LEN: 18,
-    HUNT_MAX_RATIO: 0.85,
-    HUNT_MIN_DIST: 90,
-    HUNT_MAX_DIST: 760,
+    RADAR_RANGE: 2400,
+    HUNT_MIN_LEN: 10,
+    HUNT_MAX_RATIO: 0.90,
+    HUNT_MIN_DIST: 75,
+    HUNT_MAX_DIST: 900,
     HUNT_CROWD_RADIUS: 520,
     HUNT_MAX_CROWD: 1,
-    HUNT_LOCK_MS: 3200,
+    HUNT_LOCK_MS: 4200,
     HUNT_STANDOFF: 90,
-    HUNT_BONUS: 90,
-    CHASE_BONUS: 220,
-    HUNT_BODY_BONUS: 65,
-    HUNT_FOOD_SCALE: 0.35,
+    HUNT_BONUS: 110,
+    CHASE_BONUS: 260,
+    HUNT_BODY_BONUS: 85,
+    HUNT_FOOD_SCALE: 0.25,
     HUNT_CLEAR_CAP: 26,
     SAFE_BONUS: 2000,
     UNSAFE_PENALTY: 2000
@@ -102,8 +104,8 @@
     safety: 18,
     foodPull: 1,
     hunt: true,
-    aggression: 1,
-    radarRange: 2000,
+    aggression: 1.2,
+    radarRange: 2400,
     boostEscape: true,
     autoArm: true,
     x: null,
@@ -200,6 +202,7 @@
     boostUntil: 0,
     boostCooldownUntil: 0,
     cutBoostCooldownUntil: 0,
+    chaseBoostCooldownUntil: 0,
     chaseUntil: 0,
     escapeHeading: null,
     escapeThreatId: null,
@@ -643,13 +646,15 @@
     }
     var current = state.huntTargetId ? byId[String(state.huntTargetId)] : null;
     if (current && now < state.huntUntil && current.d < TUNE.HUNT_MAX_DIST * 1.3 &&
-        current.sct <= selfLen * 0.95) {
+        current.sct <= selfLen * 0.98) {
       state.huntTarget = current;
       return current;
     }
 
     var aggression = clamp(num(state.settings.aggression, 1), 0, 2);
-    var maxRatio = TUNE.HUNT_MAX_RATIO + (aggression - 1) * 0.12;
+    // Never deliberately hunt a snake that is longer than us. The extra
+    // aggression goes into range, lock time and body-trap commitment instead.
+    var maxRatio = Math.min(1, TUNE.HUNT_MAX_RATIO + (aggression - 1) * 0.12);
     var maxDist = TUNE.HUNT_MAX_DIST * (0.85 + aggression * 0.15);
     var maxCrowd = TUNE.HUNT_MAX_CROWD + (aggression > 1.5 ? 1 : 0);
     var best = null;
@@ -1044,12 +1049,19 @@
         var lateral = Math.sin(angleDiff(enemyFromMe, base));
         var side = Math.abs(lateral) > 0.2 ? (lateral > 0 ? -1 : 1) : centerSide;
         var isBehind = Math.cos(angleDiff(enemyFromMe, base)) < -0.2;
+        // If the enemy nose is coming at us, running straight away keeps us
+        // inside its line and lets a faster snake close the gap. Step across
+        // its nose instead. The side pick keeps the dodge away from the wall
+        // and from a second head where possible.
+        var enemyAtUs = Math.cos(angleDiff(near.ang, enemyFromMe));
+        var headOn = enemyAtUs > 0.25 && near.d < 900;
         // Commit to one escape line for about a second. Recomputing the
         // away vector every frame makes the snake spiral, which lets a
         // faster chaser cut the inside of the turn.
-        state.escapeHeading = isBehind ? away + side * 0.95 : away;
+        state.escapeHeading = isBehind ? away + side * 0.95 :
+          (headOn ? away + side * 1.05 : away);
         state.escapeThreatId = nearId;
-        state.escapeUntil = now + 1100;
+        state.escapeUntil = now + (headOn ? 850 : 1100);
       }
       evadeHeading = state.escapeHeading;
     } else {
@@ -1148,11 +1160,13 @@
     }
     if (!boost && state.settings.boostEscape && now > state.boostCooldownUntil) {
       if (mode === 'escape' && best.minClear < TUNE.BOOST_CLEAR &&
-          best.minWall > 60 && num(me.sct, 0) >= 12) {
+          best.minWall > 60 && num(me.sct, 0) >= 3) {
         var nearest = modeDanger.nearest || danger.nearest;
-        if (nearest && nearest.d < 380) {
+        if (nearest && nearest.d < 480) {
           var away = Math.atan2(me.yy - nearest.y, me.xx - nearest.x);
-          if (Math.cos(angleDiff(best.heading, away)) > 0.25) {
+          // A lateral escape is valid even when it is not pointing straight
+          // away from the head. Only refuse a boost that drives into the nose.
+          if (Math.cos(angleDiff(best.heading, away)) > -0.1) {
             state.boostUntil = now + TUNE.BOOST_MS;
             state.boostCooldownUntil = now + TUNE.BOOST_MS + TUNE.BOOST_COOLDOWN;
             boost = true;
@@ -1164,12 +1178,26 @@
     // only when the current path is clear; it is never used to chase food.
     if (!boost && target && state.settings.boostEscape &&
         now > state.cutBoostCooldownUntil && mode === 'cut' &&
-        target.d > 170 && target.d < 500 && num(me.sct, 0) >= 30 &&
+        target.d > 120 && target.d < 540 && num(me.sct, 0) >= 24 &&
         best.minClear > 20 && best.minWall > 120) {
       var cutTo = Math.atan2(target.y - me.yy, target.x - me.xx);
       if (Math.cos(angleDiff(best.heading, cutTo)) > 0.05) {
         state.boostUntil = now + TUNE.CUT_BOOST_MS;
         state.cutBoostCooldownUntil = now + TUNE.CUT_BOOST_MS + TUNE.CUT_BOOST_COOLDOWN;
+        boost = true;
+      }
+    }
+    // A slower target that is being run down is a legitimate boost case.
+    // Without it a near-peer chase can take ten seconds and let the target
+    // leave the area, which is the opposite of an aggressive hunting style.
+    if (!boost && target && state.settings.boostEscape && mode === 'chase' &&
+        now > state.chaseBoostCooldownUntil && target.d > 140 && target.d < 680 &&
+        target.speed < baseSpeed * 0.98 && num(me.sct, 0) >= 16 &&
+        best.minClear > 24 && best.minWall > 120) {
+      var chaseTo = Math.atan2(target.y - me.yy, target.x - me.xx);
+      if (Math.cos(angleDiff(best.heading, chaseTo)) > 0.15) {
+        state.boostUntil = now + TUNE.CHASE_BOOST_MS;
+        state.chaseBoostCooldownUntil = now + TUNE.CHASE_BOOST_MS + TUNE.CHASE_BOOST_COOLDOWN;
         boost = true;
       }
     }
@@ -1405,7 +1433,7 @@
       '    <div class="targetline" id="targetline">No hunt target</div>',
       '    <div class="radarwrap">',
       '      <canvas class="radar" id="radar" width="220" height="220"></canvas>',
-      '      <span class="radarlabel" id="radarlabel">2,000 unit radar</span>',
+      '      <span class="radarlabel" id="radarlabel">2,400 unit radar</span>',
       '    </div>',
       '    <div class="actions">',
       '      <button type="button" class="btn primary" id="takeBtn">Take over</button>',
@@ -1416,7 +1444,7 @@
       '    <div class="slider"><span>Safety</span><input type="range" id="safety" min="4" max="40" step="1"><output id="safetyOut">18</output></div>',
       '    <div class="slider"><span>Food pull</span><input type="range" id="foodPull" min="0" max="2" step="0.1"><output id="foodPullOut">1.0</output></div>',
       '    <div class="slider"><span>Aggro</span><input type="range" id="aggression" min="0" max="2" step="0.1"><output id="aggressionOut">1.0</output></div>',
-      '    <div class="slider"><span>Radar</span><input type="range" id="radarRange" min="800" max="2400" step="100"><output id="radarRangeOut">2000</output></div>',
+      '    <div class="slider"><span>Radar</span><input type="range" id="radarRange" min="800" max="2400" step="100"><output id="radarRangeOut">2400</output></div>',
       '    <label class="check"><input type="checkbox" id="boostEscape"> Allow gated boost</label>',
       '    <div class="hint"><kbd>Alt</kbd>+<kbd>B</kbd> panel &middot; <kbd>Alt</kbd>+<kbd>T</kbd> takeover<br><kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd> release</div>',
       '    <div class="note">Starts nothing. Takes over the snake you already spawned.</div>',
@@ -1586,7 +1614,7 @@
     });
     els.aggression.addEventListener('change', saveSettings);
     els.radarRange.addEventListener('input', function () {
-      state.settings.radarRange = clamp(num(els.radarRange.value, 2000), 800, TUNE.THREAT_RANGE);
+      state.settings.radarRange = clamp(num(els.radarRange.value, TUNE.RADAR_RANGE), 800, TUNE.THREAT_RANGE);
       els.radarRangeOut.textContent = Math.round(state.settings.radarRange);
       drawRadar();
     });
@@ -2014,6 +2042,7 @@
     state.huntTarget = null;
     state.huntUntil = 0;
     state.cutBoostCooldownUntil = 0;
+    state.chaseBoostCooldownUntil = 0;
     state.chaseUntil = 0;
     state.escapeHeading = null;
     state.escapeThreatId = null;

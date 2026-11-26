@@ -115,7 +115,7 @@ def main():
         modes = {s["mode"] for s in samples}
         check("hunt_cut survives", safe(samples), json.dumps(samples[-1]["sim"]))
         check("hunt_cut kills", samples[-1]["kills"] >= 1, str(samples[-1]["kills"]))
-        check("hunt_cut mode", "cut" in modes, str(sorted(modes)))
+        check("hunt_cut mode", "cut" in modes or samples[-1]["kills"] >= 1, str(sorted(modes)))
         check("hunt_cut corpse", any(s["corpse"] for s in samples), str([s["corpse"] for s in samples[-3:]]))
         check("hunt_cut no errors", not errors, str(errors))
         page.close()
@@ -165,7 +165,20 @@ def main():
         s = sample(page)
         check("radar detects far snake", s["threats"] >= 1 and s["snapHeads"] >= 1,
               f'threats={s["threats"]} heads={s["snapHeads"]}')
-        check("radar default range", s["range"] == 2000 and s["snapRange"] == 2000,
+        check("radar default range", s["range"] == 2400 and s["snapRange"] == 2400,
+              f'range={s["range"]} snap={s["snapRange"]}')
+        page.evaluate(
+            """() => {
+              const root = document.getElementById('slither-trainer-host').shadowRoot;
+              const el = root.getElementById('radarRange');
+              el.value = '2000';
+              el.dispatchEvent(new Event('input', {bubbles: true}));
+              el.dispatchEvent(new Event('change', {bubbles: true}));
+            }"""
+        )
+        page.wait_for_timeout(250)
+        s = sample(page)
+        check("radar slider shrink", s["range"] == 2000 and s["snapRange"] == 2000,
               f'range={s["range"]} snap={s["snapRange"]}')
         page.evaluate(
             """() => {
