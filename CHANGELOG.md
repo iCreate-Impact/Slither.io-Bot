@@ -6,6 +6,86 @@ Results are per-run displayed scores, not cumulative across restarts. See [docs/
 
 ---
 
+## [v0.3.0] - 2026-11-27
+
+### Added
+
+- **Earlier, wider hunting:** the trainer starts hunting at trainer length `6`
+  instead of waiting for a long snake, the default aggression is `1.2`, the
+  radar and threat range default to `2,400`, and the hunt lock is `4.2 s`.
+- **Lead-intercept chase and stable flank:** a fleeing target is approached
+  beside its nose instead of tail-first, and the chosen side is committed while
+  that maneuver lasts.
+- **Close cut and gated boost:** a close target gets a cut across its path, the
+  cut boost is available from trainer length `12`, hunt boost is `700 ms` with a
+  `450 ms` cooldown, and head-on escape boost is `1,200 ms`.
+- **Tail-bait handling:** when a smaller, fast or boosting snake is chasing
+  from behind, the trainer holds its current line instead of cutting across the
+  chaser's nose.
+  The body already behind the head becomes the trap, and the trainer does not
+  boost away from a target that is trying to run into its tail.
+- **Evasive-prey simulations:** `hunt_evasive` and `hunt_evasive_peer` exercise a
+  target that flees the player's head and repels from its body. They are
+  pressure/survival scenarios, not kill assertions. `tail_boost` and
+  `tail_chase` assert the opposite case: a smaller chaser behind the player is
+  killed by the trailing body.
+
+### Changed
+
+- **Fleeing runners are no longer free food.** A target that runs directly away
+  at the trainer's speed or faster is skipped. A locked target that boosts or
+  becomes an uncatchable runner is dropped instead of being chased across the
+  map.
+- **Head-contact bailout:** when the target is within `self radius + target
+  radius + 70` and is at least `max(16, 75% of self length)` or boosting, the
+  hunt is abandoned for `1.2 s`. This prevents the close-range coin flip where
+  the trainer's head reaches the target body while the target's head is also
+  close. A tail-bait chaser behind the player is exempt because the body is the
+  trap; a genuinely tiny snake remains exempt as well.
+- **Body-trap commitment:** a slower target can be pressed to zero clearance;
+  an equal or faster target is dropped at half the normal danger clearance.
+- **Hunt-cost handling:** food attraction is reduced to `25%` while a hunt is
+  locked, and the uncatchable-target check applies before a new lock is taken.
+
+### Fixed
+
+- The trainer no longer reacquires the same target immediately after bailing
+  out at head-contact range.
+- A target that boosts away while locked no longer drags the trainer into a
+  long, unwinnable chase.
+
+### Validated
+
+- Closed-loop suite: `28/28` modes passed in both installed Chrome and Edge,
+  with zero simulated collisions.
+- Takeover/input-shield suite: `29/29` checks passed in Chrome and Edge.
+- Hunt/radar/UI suite: `38/38` checks passed in Chrome and Edge.
+- Benchmark: `60 fps` with five enemies x `120` points and with 24 enemies x
+  `140` points.
+- Live pre-arm harness: a `180 s` run reached game-displayed length `666`
+  (trainer score `647`, trainer length `39`) and rank `70` of `319` before the
+  harness released it while still alive. A separate v0.3.0 death screen shows
+  game final length `318`; the trainer stopped, stayed armed and did not click
+  **Play Again**. No live kills were confirmed; see the limitations below.
+- A later tail-bait live attempt survived `63 s` before a larger boosting snake
+  closed in; it exercised the new mode but did not confirm a live kill.
+- The production trainer still never launches a browser, navigates, clicks
+  **Play**, reconnects, or creates a run. Only the test harness starts runs.
+
+### Known limitations
+
+- The live runs did not produce a confirmed kill. A target that flees perfectly
+  and matches the trainer's speed can usually avoid a body trap in open space;
+  the trainer now survives those pursuits instead of ramming them.
+- Live rank and growth remain server-dependent. The best observed v0.3.0 score
+  beat the prior `213` result, but it was not rank `1`. Short runs can still end
+  in a crowded spawn or against a larger boosting snake.
+- The live harness used bundled Chromium for local injection because the
+  installed Edge channel blocked the local script fetch. The offline suite ran
+  under both installed Chrome and Edge.
+
+---
+
 ## [v0.2.1] - 2026-11-26
 
 ### Fixed

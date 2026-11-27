@@ -18,18 +18,29 @@ you open slither.io  ->  you press Play  ->  you inject trainer.js
 This is separate from the headless `slither_bot.py` / `bot_v2.js` driver. The
 trainer is self-contained and does not require Python or a build step.
 
-### What is new in v0.2.1
+### What is new in v0.3.0
 
-- Fixed the body-ramming failure: a long snake's body is now collected even
-  when its head is outside the `2,400`-unit threat range.
-- Body points use a bounded nearest-point heap, and the locked hunt target's
-  body is prioritized ahead of a crowded scene's shared body-point budget.
-- The planner, snapshots and radar now use the same prioritized body list, so
-  the trainer cannot plan against an empty body while the radar shows one.
-- Added an offline Playwright regression suite for body crossings, target
-  priority, takeover/input shielding, hunting, radar and FPS.
+- Hunting starts at length `6`, default aggression is `1.2`, and the radar,
+  threat range and default radar view are all `2,400` units.
+- Lead-intercept chase, a committed flank, a close cut, and a gated hunt boost
+  make the trainer press smaller targets instead of following them forever.
+- A target that runs directly away at the trainer's speed or faster is skipped.
+  A locked target that boosts away or turns into an uncatchable runner is
+  dropped instead of being chased across the map.
+- At head-contact range the trainer now bails out for `1.2 s` against a peer,
+  larger snake or booster, so it cannot turn straight back into the body it
+  just escaped. A genuinely tiny snake is still fair game.
+- Fixed the v0.2.1 body-ramming failure: a long snake's body is collected even
+  when its head is outside the `2,400`-unit threat range, and the target's body
+  is prioritized in the shared body-point budget.
+- Added evasive-prey simulations. They are survival/pressure scenarios: a
+  perfect equal-speed kiter can avoid a body trap in open space, so those modes
+  do not require a kill.
+- Added tail-bait handling and regression modes. A smaller, fast or boosting
+  snake chasing from behind is now allowed to run into the trailing body; the
+  trainer holds its line instead of cutting its own body out of the way.
 
-### v0.2.0 features
+### Earlier features
 
 - Threat range expanded from `1,200` to `2,400` units, with time-to-collision,
   closest-approach, crowd, wall and faster-chaser detection.
@@ -178,32 +189,42 @@ different snake could otherwise consume every available body point.
 
 When hunting is enabled, a target must pass all of these gates:
 
-- It is smaller than you (`85%` of your length by default; **Aggro** raises the
-  limit to about `97%`).
+- It is smaller than you: `90%` of your length at default aggression, rising to
+  about `92%` at **Aggro** `1.2`. The trainer never deliberately hunts a snake
+  longer than itself.
 - It is isolated: at most one other head within `520` units of the target by
   default.
-- It is within the hunt range (about `760` units, scaled by **Aggro**) and not
-  sitting against the arena wall.
-- It is not a fast booster far away, and it is not a same-speed snake running
-  directly away.
+- It is within the hunt range (`900` units before the aggression scaling) and
+  not sitting against the arena wall.
+- It is not a fast booster far away, and it is not a snake running directly
+  away at the trainer's speed or faster.
 
-A locked target is kept for up to `3.2 s` so the trainer does not flicker
-between two candidates. While locked, food attraction is cut to `35%`. The
-target is dropped if another snake becomes an urgent threat or if the chosen
-path loses safe clearance.
+A locked target is kept for up to `4.2 s` so the trainer does not flicker
+between two candidates. While locked, food attraction is cut to `25%`. A
+locked target that boosts away or becomes an uncatchable runner is dropped
+rather than followed. A slower target is pressed all the way in; an equal or
+faster target is dropped at half the normal danger clearance. If another snake
+becomes an urgent threat, the hunt is abandoned first.
 
 | Maneuver | When it is used | What it does |
 | --- | --- | --- |
 | **hunt** | Target is far or crossing | Lead-intercept toward its future position. |
-| **chase** | Target is running away | Overtakes alongside the target's body instead of rear-ending its tail, then closes the gap. |
-| **coil** | Target is close and not fleeing | Spirals at a stand-off distance to make it turn into your body. |
-| **cut** | Target is head-on or you are ahead of it | Cuts across its nose; a smaller snake that hits your trailing body dies. |
+| **chase** | Target is running away and is catchable | Overtakes alongside the target's body instead of rear-ending its tail, then closes the gap. |
+| **coil** | A close, equal-or-faster target is not fleeing | Spirals at a stand-off distance to make it turn into your body. |
+| **cut** | Target is head-on, you are ahead of it, or it is slow and close | Cuts across its nose; a smaller snake that hits your trailing body dies. |
+| **bait** | A smaller, fast or boosting snake is chasing from behind | Holds the current line so the trailing body stays in the chaser's path; no boost. |
+| **bailout** | Head-contact range against a peer, larger snake or booster | Abandons the hunt for `1.2 s` and lets the body planner handle the threat. |
 
-A target is never worth a collision. If the best rollout has less than `18`
-units of clearance, the trainer drops the hunt and treats the situation as a
-survival problem. When an urgent head-on threat is inside `340` units, the
-rollout uses a short `40 ms` panic reaction instead of the normal `240 ms`
-control lag so it can still turn away.
+A target is not worth a head-on coin flip. When the target is within
+`self radius + target radius + 70` and is at least `max(16, 75% of self length)`
+or boosting, the trainer bails out and does not reacquire it for `1.2 s`. A
+tail-bait chaser already behind the player keeps the held line, because the
+trailing body is the trap; a genuinely tiny snake also keeps the close cut,
+because its short body cannot cover the same distance. If the best rollout is
+still below the normal `18`-unit clearance, the trainer drops the hunt and
+treats the situation as a survival problem. When an urgent head-on threat is inside `340` units, the rollout uses a
+short `40 ms` panic reaction instead of the normal `240 ms` control lag so it
+can still turn away.
 
 A confirmed kill, or any visible death within `900` units, creates a feast site
 for `10 s`. Large pellets around that site are weighted much more heavily than
@@ -237,9 +258,33 @@ rollout described in the main project docs. It reads the game's own state
   target; never for ordinary food.
 
 The planner is deliberately conservative about body clearance. It is intended
-for experimenting with a live session, not for leaderboard play or unattended
-farming. Raise **Safety** if it feels reckless, lower **Aggro** to reduce
-hunting, or turn **Hunt smaller snakes** off entirely.
+for experimenting with a live session, not for unattended leaderboard farming.
+Raise **Safety** if it feels reckless, lower **Aggro** to reduce hunting, or
+turn **Hunt smaller snakes** off entirely.
+
+### v0.3.0 live validation
+
+The test harness injected the trainer before the run started and took over the
+spawned snake. The production trainer did not start, navigate or restart any
+run.
+
+| Result | Observation |
+| --- | --- |
+| Best v0.3.0 run | `180 s`, game-displayed length `666`, trainer score `647`, trainer length `39`, rank `70` of `319`; harness released it while still alive. |
+| Death screen | A separate v0.3.0 run ended at game final length `318`; the trainer stopped, stayed armed and did not click **Play Again**. |
+| Kills | No live kill was confirmed. Fleeing equal-speed targets, perfect kiters and boosting near-peers are still the weak case. |
+| Tail-bait attempt | A later `63 s` run used the tail-bait line but ended against a larger boosting snake; no live kill was confirmed. |
+| Prior comparison | The earlier `213` result was beaten on the game-displayed length/score metric, but rank `1` was not reached. |
+
+| Screenshot | What it shows |
+| --- | --- |
+| [`assets/trainer_v030_prearm3_start.png`](../../assets/trainer_v030_prearm3_start.png) | v0.3.0 takeover on a fresh run at length `2` with nearby threats and the `2,400` radar. |
+| [`assets/trainer_v030_prearm3_end.png`](../../assets/trainer_v030_prearm3_end.png) | The `180 s` run at trainer length `39`, game length `666`, rank `70`. |
+| [`assets/trainer_v030_prearm3_death.png`](../../assets/trainer_v030_prearm3_death.png) | Game final length `318`; trainer armed and waiting, **Play Again** untouched. |
+
+The live harness used bundled Chromium because the installed Edge channel
+blocked the local script fetch. The offline suite ran in both installed Chrome
+and Edge.
 
 ---
 
@@ -266,8 +311,12 @@ python panel/trainer/tests/test_hunt_radar.py
 python panel/trainer/tests/bench.py --enemies 24 --segments 140
 ```
 
-The closed-loop suite includes `body_far_head`, `body_far_moving`,
-`body_target_last` and `body_many` for the v0.2.1 body fix. See
+The `28`-scenario closed-loop suite includes `body_far_head`,
+`body_far_moving`, `body_target_last` and `body_many` for the body fix,
+`hunt_evasive` and `hunt_evasive_peer` for close pursuit against a target that
+flees and repels from the body, and `tail_boost`/`tail_chase` for a smaller
+chaser behind the player. The evasive modes are survival/pressure scenarios,
+not kill assertions; the tail modes assert a kill by the trailing body. See
 [`docs/TRAINER_TESTING.md`](../../docs/TRAINER_TESTING.md) for the root cause,
 test geometry, validation results and live-test checklist.
 

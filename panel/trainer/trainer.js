@@ -539,6 +539,18 @@
     return Math.atan2(y, x);
   }
 
+  function isTailBait(me, s, selfLen) {
+    if (!s || s.sct > selfLen * 0.9) return false;
+    var toT = Math.atan2(s.y - me.yy, s.x - me.xx);
+    var behind = Math.cos(angleDiff(toT, num(me.ang, 0))) < -0.35;
+    var towardUs = Math.cos(angleDiff(s.ang, toT + Math.PI)) > 0.15;
+    var selfSpeed = Math.max(TUNE.SPEED_MIN, num(me.sp, 5.5) * TUNE.SPEED_MULT);
+    // A slower snake behind us cannot reach the tail. Hold the line only
+    // when the chaser can actually catch up; otherwise turn and cut it.
+    var canCatch = !!s.boost || num(s.speed, 0) >= selfSpeed * 1.0;
+    return behind && towardUs && canCatch;
+  }
+
   function chooseHuntSide(me, target, arena, heads) {
     var centerAng = Math.atan2(arena.cy - me.yy, arena.cx - me.xx);
     function scoreSide(sign) {
@@ -710,10 +722,13 @@
         current.sct <= selfLen * 0.98) {
       var currentToT = Math.atan2(current.y - me.yy, current.x - me.xx);
       var currentAway = Math.cos(angleDiff(current.ang, currentToT));
+      var currentTail = isTailBait(me, current, selfLen);
       // A target that boosts or turns into a faster runner is no longer a
       // kill; it is a chase that drags the trainer across the map. Drop the
-      // lock before that happens, not after thirty seconds of pursuit.
-      var uncatchable = (current.boost && current.d > 200) ||
+      // lock before that happens, not after thirty seconds of pursuit. A
+      // smaller snake boosting up our tail is the exception: it is running
+      // into the body behind us, not away from it.
+      var uncatchable = (!currentTail && current.boost && current.d > 200) ||
         (currentAway > 0.55 && current.speed >= selfSpeed * 0.98);
       if (!uncatchable) {
         state.huntTarget = current;
@@ -737,7 +752,8 @@
           String(state.huntCooldownId) === String(s.id)) continue;
       if (s.sct < 4 || s.sct > selfLen * maxRatio) continue;
       if (s.d < TUNE.HUNT_MIN_DIST || s.d > maxDist) continue;
-      if (s.boost && s.d > 260) continue;
+      var tailBait = isTailBait(me, s, selfLen);
+      if (s.boost && s.d > 260 && !tailBait) continue;
       var crowd = 0;
       for (var k = 0; k < threats.heads.length; k++) {
         var h = threats.heads[k];
@@ -756,7 +772,8 @@
       if (away > 0.55 && s.speed >= selfSpeed * 0.98) continue;
       var ratio = s.sct / Math.max(1, selfLen);
       var score = 50 + s.sct * 1.4 + (maxDist - s.d) * 0.045 -
-        ratio * 28 - crowd * 26 - (s.boost ? 35 : 0);
+        ratio * 28 - crowd * 26 - (s.boost && !tailBait ? 35 : 0);
+      if (tailBait) score += 18;
       score += Math.cos(angleDiff(toTarget, me.ang)) * 10;
       score *= 0.75 + aggression * 0.25;
       if (!best || score > best.score) {
@@ -931,7 +948,12 @@
       var toT = Math.atan2(htY - me.yy, htX - me.xx);
       var standoff = clamp(TUNE.HUNT_STANDOFF + ht.sct * 1.6, 100, 210);
       var desiredHunt;
-      if (ctx.maneuver === 'cut') {
+      if (ctx.maneuver === 'bait') {
+        // Hold the current line. A smaller snake chasing our tail dies on the
+        // body already behind us; turning across its nose moves that body out
+        // of its path and turns a free kill into another close miss.
+        desiredHunt = startAng;
+      } else if (ctx.maneuver === 'cut') {
         desiredHunt = htAng + ctx.huntSide * Math.PI / 2;
         desiredHunt = angleBlend(desiredHunt, toT, clamp((td - 260) / 600, 0, 0.45));
       } else if (ctx.maneuver === 'chase') {
@@ -965,13 +987,15 @@
       var huntBonus = ctx.maneuver === 'chase' ? TUNE.CHASE_BONUS : TUNE.HUNT_BONUS;
       huntScore += huntAlign * huntBonus * ctx.aggression;
 
-      var endX = path[path.length - 2];
-      var endY = path[path.length - 1];
-      var endD = Math.sqrt(dist2(endX, endY, htX, htY));
-      if (endD > standoff) {
-        huntScore += clamp(1 - (endD - standoff) / 520, 0, 1) * 22 * ctx.aggression;
-      } else if (endD < standoff * 0.7) {
-        huntScore -= (standoff * 0.7 - endD) * 0.9 * ctx.aggression;
+      if (ctx.maneuver !== 'bait') {
+        var endX = path[path.length - 2];
+        var endY = path[path.length - 1];
+        var endD = Math.sqrt(dist2(endX, endY, htX, htY));
+        if (endD > standoff) {
+          huntScore += clamp(1 - (endD - standoff) / 520, 0, 1) * 22 * ctx.aggression;
+        } else if (endD < standoff * 0.7) {
+          huntScore -= (standoff * 0.7 - endD) * 0.9 * ctx.aggression;
+        }
       }
 
       // Body-trap model: the target dies if its head reaches our body.
@@ -1062,7 +1086,9 @@
 
     var target = selectHuntTarget(me, threats, arena, now);
     var selfLen = Math.max(0, num(me.sct, 0));
-    if (target && target.d < selfR + snakeRadius(target) + 70 &&
+    var tailBait = target ? isTailBait(me, target, selfLen) : false;
+    if (target && !tailBait &&
+        target.d < selfR + snakeRadius(target) + 70 &&
         (target.sct >= Math.max(16, selfLen * 0.75) || target.boost)) {
       // Head-to-head at this range is a coin flip: our head can touch the
       // target body just as easily as its head can touch ours. Bail out,
@@ -1102,6 +1128,7 @@
           // tangent coil actually helps bring the body around.
           target.maneuver = target.speed < baseSpeed * 0.95 ? 'cut' : 'coil';
         } else target.maneuver = 'hunt';
+        if (tailBait) target.maneuver = 'bait';
         target.huntSide = chooseHuntSide(me, target, arena, threats.heads);
         var fromTarget = Math.atan2(me.yy - target.y, me.xx - target.x);
         var lateral = Math.sin(angleDiff(fromTarget, target.ang));
@@ -1300,7 +1327,8 @@
     // target cannot ram us, so press that kill all the way in; against an
     // equal or faster snake, abandon a genuinely tight line and cancel the
     // hunt boost so the trainer cannot coast into the body.
-    var closeLimit = target && target.speed < baseSpeed * 0.95 ?
+    var closeLimit = target &&
+      (target.maneuver === 'bait' || target.speed < baseSpeed * 0.95) ?
       0 : TUNE.DANGER_CLEAR * 0.5;
     if (target && best.minClear < closeLimit) {
       mode = 'danger';
@@ -1566,6 +1594,7 @@
       '.pill[data-mode="hunt"]{color:#fecdd3;border-color:#7f1d2d;background:#2a0d13;}',
       '.pill[data-mode="coil"]{color:#fbcfe8;border-color:#7e2b5a;background:#280d1d;}',
       '.pill[data-mode="cut"]{color:#fed7aa;border-color:#9a3412;background:#2a130b;}',
+      '.pill[data-mode="bait"]{color:#fbcfe8;border-color:#7e2b5a;background:#280d1d;}',
       '.pill[data-mode="cruise"]{color:#bae6fd;border-color:#1d4f6b;background:#0c1c26;}',
       '.targetline{margin:-3px 0 8px;min-height:12px;color:#71889d;font-size:9px;letter-spacing:.02em;',
       'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',

@@ -12,9 +12,11 @@ playwright-report/
 test-results/
 .playwright/
 
-# Playwright run snapshots and traces (screenshots stay tracked)
+# Playwright run snapshots and traces (curated screenshots stay tracked)
 assets/page-*.yml
 assets/*death_log*.json
+# Throwaway live-probe captures; curated trainer screenshots stay tracked.
+assets/*_probe*.png
 
 # Local logs and editor/OS files
 *.log

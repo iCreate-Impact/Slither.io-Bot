@@ -70,6 +70,19 @@
     selfMax = 16;
     self.sct = 16;
     enemies = [makeEnemy(2, 16384 - 700, 16384, 0, 13.76, 100)];
+  } else if (mode === "tail_boost") {
+    // A smaller boosting snake is chasing our tail. Turning across its nose
+    // moves our body out of its path; holding the line lets it run into the
+    // tail. This is the live case that previously ended in a close miss.
+    selfMax = 30;
+    self.sct = 30;
+    enemies = [makeEnemy(2, 16384 - 350, 16384, 0, 13.76, 16)];
+  } else if (mode === "tail_chase") {
+    // The same geometry with a non-boosting, slightly faster chaser. It is
+    // slower to arrive, but the body trap should still finish it.
+    selfMax = 30;
+    self.sct = 30;
+    enemies = [makeEnemy(2, 16384 - 350, 16384, 0, 6.3, 16)];
   } else if (mode === "headon_boost") {
     // A larger boosting snake runs straight at a short player. The player
     // must be able to boost out of the way even before the old 12-length gate.

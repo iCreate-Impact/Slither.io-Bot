@@ -1,11 +1,55 @@
-# Trainer testing and the v0.2.1 body-collision fix
+# Trainer testing and the v0.3.0 hunting update
 
 This document covers the browser-injectable trainer in `panel/trainer/`, its
-offline Playwright tests, and the body-visibility bug that caused the trainer to
-ram other snakes in a live run.
+offline Playwright tests, the v0.2.1 body-visibility fix, and the v0.3.0
+hunting/safety changes.
 
 The production trainer still does **not** launch a browser, navigate, click
 **Play**, reconnect, or create a run. The Playwright harness is test-only.
+
+---
+
+## v0.3.0 hunting and safety changes
+
+v0.3.0 raises the default aggression to `1.2`, starts hunting at trainer length
+`6`, and keeps the `2,400`-unit radar/threat range. The hunting behavior now
+includes:
+
+- lead-intercept chase with a committed flank;
+- a close cut, including against slower targets;
+- gated hunt boost (`700 ms`, `450 ms` cooldown) and a cut boost available from
+  trainer length `12`;
+- a `1,200 ms` head-on escape boost;
+- rejection of a target that runs directly away at the trainer's speed or
+  faster;
+- dropping a locked target that boosts away or becomes an uncatchable runner;
+- a `1.2 s` cooldown after bailing out at head-contact range against a peer,
+  larger snake or booster;
+- tail-bait handling: a smaller chaser behind the player gets a held line so it
+  can run into the trailing body, instead of a cut that moves the body away.
+
+The close-pursuit safety rule is:
+
+```text
+if target.d < selfRadius + targetRadius + 70
+   and not target.isBehindAndChasing
+   and (target.sct >= max(16, 0.75 * selfLen) or target.boost):
+       drop the hunt for 1200 ms
+       cancel the hunt boost
+```
+
+A smaller chaser behind the player is exempt when it is fast or boosting enough
+to catch the tail: the trailing body is the trap and the trainer holds its line.
+A genuinely tiny snake is exempt because its short body cannot cover the same
+distance. The normal body planner still treats every enemy body as an obstacle.
+
+### What v0.3.0 did not solve
+
+A target that flees perfectly and matches the trainer's speed can avoid a body
+trap in open space. The trainer now survives those pursuits and drops
+uncatchable runners instead of ramming them, but it did not record a live kill
+in the validation runs. The two evasive scenarios are therefore pressure and
+survival tests, not kill assertions.
 
 ---
 
@@ -124,9 +168,9 @@ Individual suites:
 
 | Command | Checks |
 | --- | --- |
-| `python panel/trainer/tests/test_modes.py` | 18 closed-loop scenarios: walls, head-on, crossing, hunting, corpse feast, radar, and four body regressions. |
+| `python panel/trainer/tests/test_modes.py` | 28 closed-loop scenarios: walls, head-on, crossing, hunting, evasive pressure, tail-bait, corpse feast, radar, and four body regressions. |
 | `python panel/trainer/tests/test_takeover.py` | 29 takeover/release, death handling, handler restoration and input-shield checks. |
-| `python panel/trainer/tests/test_hunt_radar.py` | 37 hunt/cut/kill, feast, radar range/drawing and panel-control checks. |
+| `python panel/trainer/tests/test_hunt_radar.py` | 38 hunt/cut/kill, feast, radar range/drawing and panel-control checks. |
 | `python panel/trainer/tests/bench.py` | Planner FPS with five enemies and 120 points each. |
 | `python panel/trainer/tests/bench.py --enemies 24 --segments 140` | Crowded-scene FPS stress test. |
 
@@ -153,13 +197,21 @@ Reference environment: Windows, Playwright 1.59.0, headless mode. The suite was
 run with the installed Chrome 155 channel and rerun with Edge 158.0.4370.45.
 
 ```text
-test_modes.py       18/18 modes passed (Chrome and Edge)
+test_modes.py       28/28 modes passed (Chrome and Edge)
 test_takeover.py    29/29 checks passed (Chrome and Edge)
-test_hunt_radar.py  37/37 checks passed (Chrome and Edge)
+test_hunt_radar.py  38/38 checks passed (Chrome and Edge)
 bench.py            60 fps, 5 enemies x 120 points (Chrome and Edge)
 bench.py --enemies 24 --segments 140
                     60 fps, 24 enemies x 140 points (Chrome and Edge)
 ```
+
+The `28`-mode suite includes `hunt_evasive` and `hunt_evasive_peer`. They assert
+survival, zero collisions and positive wall clearance, but not a kill. A perfect
+equal-speed kiter can always turn away in open space; the safety regression is
+that the trainer does not cut into its body. `tail_boost` and `tail_chase` cover
+the opposite geometry, a smaller chaser behind the player, and do assert a kill
+by the trailing body. `hunt_early` gets a minimum `16 s` window because the
+first cut can overshoot the short target.
 
 Representative body minima from the Edge run:
 
@@ -174,7 +226,36 @@ The mock collision radius is the sum of the two body radii. The planner uses an
 additional safety margin, so these minima are not the actual collision
 threshold.
 
-### Live Edge run
+### v0.3.0 live pre-arm runs
+
+The v0.3.0 harness injected the trainer into the page before clicking the game's
+**Play** button, then took over the spawn immediately. The production trainer
+never started a run, navigated, clicked **Play Again**, or reconnected; only the
+harness did.
+
+The best run observed:
+
+- `180 s` of live control, released while still alive;
+- game-displayed length `666`;
+- trainer score `647`, trainer length `39`;
+- rank `70` of `319`;
+- `0` confirmed kills.
+
+A separate run ended at game final length `318`; the trainer stopped, stayed
+armed and left **Play Again** untouched. This beats the prior `213` result on the
+game-displayed length/score metric, but not rank `1`.
+
+Live outcomes remain variable. A `600 s` attempt died at `82 s` in a crowded
+spawn, and a later aggression experiment died at `53 s`; that experiment was
+reverted. A tail-bait live attempt survived `63 s` before a larger boosting
+snake closed in; it confirmed the new mode but did not record a kill. The
+stable configuration is the one described in this document.
+
+The live harness used bundled Chromium because the installed Edge channel
+blocked the local script fetch. The offline suite ran in both installed Chrome
+and Edge, which is why the deterministic test results above cover both.
+
+### v0.2.1 live run (historical)
 
 On 2026-11-26 a live run was made with the test harness in headless Edge. The
 harness set the nickname to `test`, started the run, injected `trainer.js`
@@ -205,6 +286,9 @@ deterministic check for the ramming fix.
 
 | Screenshot | What it shows |
 | --- | --- |
+| [`assets/trainer_v030_prearm3_start.png`](../assets/trainer_v030_prearm3_start.png) | v0.3.0 takeover on a fresh run at trainer length `2`, with nearby threats and the `2,400` radar. |
+| [`assets/trainer_v030_prearm3_end.png`](../assets/trainer_v030_prearm3_end.png) | The `180 s` v0.3.0 run at trainer length `39`, game length `666`, rank `70`, feast site and radar. |
+| [`assets/trainer_v030_prearm3_death.png`](../assets/trainer_v030_prearm3_death.png) | Separate v0.3.0 run ended at game final length `318`; trainer armed, **Play Again** untouched. |
 | [`assets/trainer_edge_start.png`](../assets/trainer_edge_start.png) | Nickname `test`; trainer idle before the harness starts the run. |
 | [`assets/trainer_edge_takeover.png`](../assets/trainer_edge_takeover.png) | Takeover active with the v0.2.1 panel and radar. |
 | [`assets/trainer_edge_live.png`](../assets/trainer_edge_live.png) | Live steering at length 192; threat count, clearance and radar are visible. |
@@ -221,12 +305,16 @@ offline pages cannot reproduce the live server:
 
 1. Start slither.io manually and spawn a snake.
 2. Paste `panel/trainer/trainer.js` into the DevTools console.
-3. Confirm the panel header shows `v0.2.1`.
+3. Confirm the panel header shows `v0.3.0`.
 4. Click **Take over** and check steering, radar and FPS.
 5. Approach a long snake's body, preferably with its head off-screen; confirm
    the trainer turns away instead of crossing it.
-6. Click **Release** and `Alt+Shift+X`; confirm the game gets control back.
-7. Let the snake die once and confirm the trainer stops without clicking
+6. Watch one close hunt against a peer or boosting snake; confirm the trainer
+   bails out instead of pressing its head into the target body.
+7. Let a smaller snake chase from behind; confirm the trainer holds its line
+   and the chaser hits the trailing body instead of the trainer cutting away.
+8. Click **Release** and `Alt+Shift+X`; confirm the game gets control back.
+9. Let the snake die once and confirm the trainer stops without clicking
    **Play Again** or creating a new run.
 
 ---
@@ -242,7 +330,16 @@ offline pages cannot reproduce the live server:
   prioritized first in the shared budget.
 - The test suite is offline by default. The live probe is one-off and
   non-deterministic. A live head-on chase against a faster or larger player can
-  still end a run; v0.2.1 fixes body visibility, not every possible collision.
+  still end a run; v0.3.0 reduces the close-range coin flip, it does not make the
+  snake invincible.
+- v0.3.0 did not record a confirmed live kill. An equal-speed target that flees
+  perfectly can avoid a body trap in open space; the trainer now survives and
+  drops those targets rather than ramming them. The live best was rank `70` of
+  `319`, not rank `1`.
+- The live harness used bundled Chromium because the installed Edge channel
+  blocked the local script fetch. The offline suite covers both installed
+  Chrome and Edge; live Edge injection needs a different loader or an
+  already-open page.
 - Bots may violate the game's terms of service. Use the trainer sparingly and
   only on a run you started yourself.
 

@@ -32,6 +32,8 @@ DEFAULT_MODES = [
     "behind",
     "behind_boost",
     "behind_boost_short",
+    "tail_boost",
+    "tail_chase",
     "hunt",
     "hunt_cut",
     "hunt_far",
@@ -92,6 +94,8 @@ def main() -> int:
                     seconds = max(args.seconds, 16.0)
                 elif mode in ("hunt_peer", "hunt_evasive", "hunt_evasive_peer"):
                     seconds = max(args.seconds, 12.0)
+                elif mode in ("tail_boost", "tail_chase"):
+                    seconds = max(args.seconds, 10.0)
                 else:
                     seconds = args.seconds
                 early = None
@@ -157,7 +161,9 @@ def main() -> int:
                         and early["target"] in early["bodyIds"]
                     )
                     ok = ok and (final_target_ok or early_target_ok)
-                if mode in ("hunt_early", "hunt_peer"):
+                if mode in (
+                    "hunt_early", "hunt_peer", "tail_boost", "tail_chase"
+                ):
                     ok = ok and info["sim"].get("kills", 0) >= 1
                 # hunt_evasive / hunt_evasive_peer are pressure scenarios:
                 # the prey flees perfectly and matches our speed, so the

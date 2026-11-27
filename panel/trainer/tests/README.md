@@ -44,13 +44,13 @@ machine.
 ## Run individual suites
 
 ```bash
-# 18 closed-loop collision, wall, hunting, body, feast and radar scenarios
+# 28 closed-loop collision, wall, hunting, tail-bait, body, feast and radar scenarios
 python panel/trainer/tests/test_modes.py
 
 # 29 takeover, release, death-handling and input-shield checks
 python panel/trainer/tests/test_takeover.py
 
-# 37 hunt, corpse-feast, radar and panel-control checks
+# 38 hunt, corpse-feast, radar and panel-control checks
 python panel/trainer/tests/test_hunt_radar.py
 
 # planner FPS with a synthetic crowd
@@ -80,15 +80,37 @@ enemy head was 2,600 units away, its body crossed the trainer's path, and the
 trainer died with one collision. After the fix it completes with zero
 collisions and roughly 200 units of minimum enemy clearance.
 
+## Evasive-prey scenarios
+
+| Scenario | What it proves |
+| --- | --- |
+| `hunt_evasive` | An equal-speed target flees the trainer's head and repels from its body. The trainer must survive and keep pressure without ramming. |
+| `hunt_evasive_peer` | The same behaviour with a near-peer target. The trainer must survive the close pursuit; a kill is not required. |
+
+These are deliberately not kill assertions. A target that always turns away and
+matches the trainer's speed can avoid a body trap in open space; the useful
+regression is that the trainer no longer cuts into its body while trying.
+
+`tail_boost` and `tail_chase` cover the opposite geometry: a smaller snake is
+behind the player, driving toward it, and is fast or boosting enough to catch
+the tail. The trainer must hold its line and let the trailing body kill the
+chaser, without a collision or a boost escape. These modes do assert
+`kills >= 1`.
+
+`hunt_early` gets a minimum `16 s` window because the first cut can overshoot the
+short target. `hunt_peer`, `hunt_evasive` and `hunt_evasive_peer` get at least
+`12 s`; the tail modes get at least `10 s`; the runner still accepts a larger
+`--seconds` value.
+
 ## Reference result
 
 Validated on Windows with Playwright 1.59.0, headless mode, using the installed
 Chrome 155 channel and Edge 158.0.4370.45:
 
 ```text
-test_modes.py       18/18 modes passed (Chrome and Edge)
+test_modes.py       28/28 modes passed (Chrome and Edge)
 test_takeover.py    29/29 checks passed (Chrome and Edge)
-test_hunt_radar.py  37/37 checks passed (Chrome and Edge)
+test_hunt_radar.py  38/38 checks passed (Chrome and Edge)
 bench.py             60 fps, 5 enemies x 120 points (Chrome and Edge)
 bench.py --enemies 24 --segments 140
                      60 fps, 24 enemies x 140 points (Chrome and Edge)
@@ -105,7 +127,15 @@ pages approximate the client's trail, turn, speed and collision model, but they
 do not reproduce server latency, other players' decisions, anti-cheat, or the
 live server's exact collision resolution. A live head-on chase against a faster
 or larger player can still end a run; these tests prove the body-ramming
-regression, not invincibility. Run a short manual live session before publishing
-a trainer change. See
+regression and the close-pursuit safety checks, not invincibility.
+
+The v0.3.0 live harness reached game-displayed length `666` (trainer score
+`647`, rank `70` of `319`) in a `180 s` run and released the live snake. A
+separate death screen showed game final length `318`; the trainer stayed armed
+and did not press **Play Again**. No live kill was confirmed; a perfect
+equal-speed kiter is still the hard case. The live harness used bundled
+Chromium for local injection because the installed Edge channel blocked the
+local fetch; the offline suite ran in both installed Chrome and Edge. Run a
+short manual live session before publishing a trainer change. See
 [`docs/TRAINER_TESTING.md`](../../../docs/TRAINER_TESTING.md) for the full test
-protocol, live Edge results and screenshots.
+protocol, live results and screenshots.
