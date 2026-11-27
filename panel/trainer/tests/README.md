@@ -105,10 +105,12 @@ map frontier. The test asserts that the sampled trail covers more than `1%` of
 the reachable grid and at least three cells. A frontier path still has to pass
 the normal rollout clearance and wall checks.
 
-`hunt_early` gets a minimum `16 s` window because the first cut can overshoot the
-short target. `hunt_peer`, `hunt_equal`, `hunt_evasive` and `hunt_evasive_peer`
-get at least `12 s`; the tail and map modes get at least `10 s`; the runner still
-accepts a larger `--seconds` value.
+`hunt_early` gets a minimum `20 s` window because the first cut can overshoot the
+short target; a `16 s` window occasionally ended with the trainer circling a
+live target, which was a timing flake rather than a collision or
+target-selection failure. `hunt_peer`, `hunt_equal`, `hunt_evasive` and
+`hunt_evasive_peer` get at least `12 s`; the tail and map modes get at least
+`10 s`; the runner still accepts a larger `--seconds` value.
 
 ## Reference result
 
@@ -135,13 +137,16 @@ live server's exact collision resolution. A live head-on chase against a faster
 or larger player can still end a run; these tests prove the body-ramming
 regression and the close-pursuit safety checks, not invincibility.
 
-The v0.3.0 live harness reached game-displayed length `666` (trainer score
-`647`, rank `70` of `319`) in a `180 s` run and released the live snake. A
-separate death screen showed game final length `318`; the trainer stayed armed
-and did not press **Play Again**. No live kill was confirmed; a perfect
-equal-speed kiter is still the hard case. The live harness used bundled
-Chromium for local injection because the installed Edge channel blocked the
-local fetch; the offline suite ran in both installed Chrome and Edge. Run a
-short manual live session before publishing a trainer change. See
+The best v0.4.0 live run reached trainer length `36`, displayed length/score
+`585` and rank `51` in `180.8 s`, then was released while still alive. No live
+kill was confirmed; a perfect equal-speed kiter and a crowded box-in remain the
+hard cases. The best v0.3.0 run reached displayed length `666` (trainer score
+`647`, rank `70` of `319`) in `180 s`; a separate death screen showed game final
+length `318`, and the trainer stayed armed without pressing **Play Again**.
+
+The best v0.4.0 live run used headed Chrome. Edge automation was blocked by the
+site's local-script fetch (`net::ERR_BLOCKED_BY_CLIENT`), while the offline suite
+runs in both installed Chrome and Edge. Run a short manual live session before
+publishing a trainer change. See
 [`docs/TRAINER_TESTING.md`](../../../docs/TRAINER_TESTING.md) for the full test
 protocol, live results and screenshots.

@@ -13,19 +13,21 @@ planner rewrite.
 
 ## Files likely involved
 
-- [ ] `bot_v2.js`
-- [ ] `slither_bot.py`
-- [ ] `tools/sync_embedded.py` / tests
-- [ ] `docs/PERFORMANCE.md` / docs
-- [ ] `recon/` or `probe_tops.py`
+- [ ] `panel/trainer/src/` module plus rebuilt `trainer.js`
+- [ ] `panel/trainer/tests/sim_modes.html` or a suite assertion
+- [ ] `panel/trainer/README.md`
+- [ ] `docs/ARCHITECTURE.md` / `docs/TRAINER_MODULES.md`
+- [ ] `docs/TRAINER_TESTING.md` / `docs/PERFORMANCE.md`
+- [ ] `panel/cheats/state_probe.js` documentation
 
 ## Acceptance criteria
 
-- [ ] The change is behind a flag if it affects steering.
-- [ ] Syntax and embedded-sync checks pass.
-- [ ] A short forced-server run or a deterministic unit test validates it.
-- [ ] Result state and stats are recorded if it is a live run.
-- [ ] Results are described as measured.
+- [ ] The change is behind a setting if it affects steering.
+- [ ] `python panel/trainer/build.py --check` and `node --check` pass.
+- [ ] A deterministic scenario or assertion fails before and passes after.
+- [ ] Chrome and Edge suites pass (`31/31`, `31/31`, `42/42`).
+- [ ] A live result is recorded when the issue needs live evidence.
+- [ ] The production trainer still never starts or restarts a run.
 
 ## Mentorship notes
 

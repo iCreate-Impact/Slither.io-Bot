@@ -280,8 +280,7 @@ just because the local field is still dense.
 
 ## Planner
 
-The trainer uses a compact live-state planner, not the full 2.2 s / 112-candidate
-rollout described in the main project docs. It reads the game's own state
+The trainer uses a compact live-state planner. It reads the game's own state
 (`window.slither`, `window.slithers`, `window.foods`, `window.flux_grd`,
 `window.grd`) and scores candidate headings:
 

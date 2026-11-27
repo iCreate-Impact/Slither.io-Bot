@@ -260,10 +260,10 @@ Representative body minima from the Edge run:
 
 | Scenario | Simulated frames | Collisions | Minimum enemy distance |
 | --- | ---: | ---: | ---: |
-| `body_far_head` | 501 | 0 | 202.0 |
-| `body_far_moving` | 500 | 0 | 220.8 |
-| `body_target_last` | 500 | 0 | 112.8 |
-| `body_many` | 500 | 0 | 401.2 |
+| `body_far_head` | 502 | 0 | 200.8 |
+| `body_far_moving` | 501 | 0 | 224.8 |
+| `body_target_last` | 502 | 0 | 39.5 |
+| `body_many` | 500 | 0 | 499.0 |
 
 The mock collision radius is the sum of the two body radii. The planner uses an
 additional safety margin, so these minima are not the actual collision
@@ -391,9 +391,11 @@ offline pages cannot reproduce the live server:
   non-deterministic. A live head-on chase against a faster or larger player can
   still end a run; v0.4.0 reduces the close-range coin flip, it does not make the
   snake invincible.
-- No live v0.4.0 result is recorded yet. The v0.3.0 live best was rank `70` of
-  `319`, not rank `1`, and did not confirm a live kill. An equal-speed target
-  that flees perfectly can still avoid a body trap in open space.
+- The best v0.4.0 live run was rank `51` at `180.8 s`; rank `1` was not
+  reached, and no live kill was confirmed. An equal-speed target that flees
+  perfectly can still avoid a body trap in open space.
+- Live map coverage was `1.9%` (`13` of `673` cells) in that run. The frontier
+  is only a calm-area vote; crowd pressure kept the best run farming locally.
 - The v0.4.0 modes and panel changes passed in both installed Chrome and Edge.
   Live Edge injection still needs a different loader or an already-open page
   because the installed Edge channel blocks the local script fetch.

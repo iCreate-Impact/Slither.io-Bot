@@ -74,10 +74,6 @@
     FOOD_CLUSTER_BONUS: 0.16,
     CORPSE_RADIUS: 360,
     CORPSE_MS: 12000,
-    // A dense local cluster can re-arm corpse mode forever. After one feast,
-    // give the map a short clear window so the frontier can actually pull the
-    // snake out of the same pocket before another cluster takes over.
-    FEAST_COOLDOWN_MS: 6500,
     CORPSE_WEIGHT: 12,
     // A positive clearance below this is still a scrape: the next server
     // step or a body wiggle can close the gap. Feast/farm must not keep
@@ -270,7 +266,6 @@
     huntCooldownUntil: 0,
     kills: 0,
     corpse: null,
-    feastCooldownUntil: 0,
     deadIds: {},
     coverage: 0,
     mapVisited: 0,
@@ -556,7 +551,6 @@
 
   function detectCorpse(foods, now) {
     if (state.corpse && now < state.corpse.until) return;
-    if (now < state.feastCooldownUntil) return;
     var big = [];
     for (var i = 0; i < foods.length; i++) {
       var f = foods[i];
@@ -1443,10 +1437,7 @@
     var danger = assessDanger(me, threats, arena);
     state.danger = danger.level;
     state.nearest = danger.nearest;
-    if (state.corpse && now >= state.corpse.until) {
-      state.corpse = null;
-      state.feastCooldownUntil = now + TUNE.FEAST_COOLDOWN_MS;
-    }
+    if (state.corpse && now >= state.corpse.until) state.corpse = null;
     detectCorpse(foods, now);
     // Keep the coarse map warm every tick, even while hunting. The frontier
     // heading only votes when the local area is calm and no target/feast is
@@ -1673,12 +1664,6 @@
       // becomes a real vote only when the nearby field is thin.
       mapWeight = state.settings.explore *
         clamp(0.9 - nearFood * 0.02, 0.25, 0.9);
-      // During the post-feast cooldown, a dense local field would otherwise
-      // keep the weight at its floor and the snake would circle the same
-      // pocket. Make the clear window an actual sweep vote.
-      if (now < state.feastCooldownUntil) {
-        mapWeight = Math.max(mapWeight, state.settings.explore * 0.75);
-      }
     }
 
     var ctx = {
@@ -1983,10 +1968,7 @@
     var selfBody = collectSelfBody(me);
     var foods = collectFoods(me, Math.max(TUNE.FOOD_RANGE, state.settings.radarRange),
       TUNE.FOOD_RADAR_POINTS);
-    if (state.corpse && now >= state.corpse.until) {
-      state.corpse = null;
-      state.feastCooldownUntil = now + TUNE.FEAST_COOLDOWN_MS;
-    }
+    if (state.corpse && now >= state.corpse.until) state.corpse = null;
     mapSample(me, arena, now);
     mapChooseFrontier(me, arena, now);
     var danger = assessDanger(me, threats, arena);
@@ -2766,7 +2748,6 @@
     if (full) {
       state.kills = 0;
       state.corpse = null;
-      state.feastCooldownUntil = 0;
       state.deadIds = {};
       state.danger = 0;
       state.nearest = null;
