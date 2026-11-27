@@ -15,10 +15,11 @@ you open slither.io  ->  you press Play  ->  you inject trainer.js
                                              +-> "Release" returns control
 ```
 
-This is separate from the headless `slither_bot.py` / `bot_v2.js` driver. The
-distributed trainer is a self-contained bundle; users do not need Python or a
-build step. The source is modular for maintenance, and rebuilding the bundle is
-only needed after editing `panel/trainer/src/`.
+The distributed trainer is a self-contained bundle; users do not need Python
+or a build step. The source is modular for maintenance, and rebuilding the
+bundle is only needed after editing `panel/trainer/src/`. There is no
+production Python driver in this repository; Python and Playwright are used
+only by the offline test harness and diagnostics.
 
 ### What is new in v0.4.0
 
@@ -35,6 +36,16 @@ only needed after editing `panel/trainer/src/`.
   local density instead of distance alone, and the default food pull is `1.15`.
   Food attraction is cut to `8%` while a hunt is live so a farm cannot pull the
   snake off a committed kill.
+- **Fast-peer bailout:** a target at least `55%` of the player's length that is
+  closing at `92%` of the player's speed is dropped at a `240`-unit contact
+  margin. A slower peer still gets the normal close cut, so the trainer does
+  not turn every winnable hunt into a stalemate.
+- **Body-pressure caution:** after a no-target frame with less than `30` units
+  of clearance, feast/farm attraction is suppressed for `900 ms`. The guard is
+  disabled while an active hunt is committing, where a close cut is expected.
+- **Stable map persistence:** the visited grid compares against the actual
+  arena geometry with a `650`-unit tolerance instead of a rounded bucket key.
+  Live `flux_grd` drift no longer resets coverage to one cell.
 - **Source modules:** the trainer source is split into planner, world, map,
   feed, hunt, control, panel and input files. `trainer.js` remains the single
   bundle consumed by the userscript, bookmarklet and tests.
@@ -48,7 +59,7 @@ only needed after editing `panel/trainer/src/`.
 - A target that runs directly away at the trainer's speed or faster is skipped.
   A locked target that boosts away or turns into an uncatchable runner is
   dropped instead of being chased across the map.
-- At head-contact range the trainer now bails out for `1.2 s` against a peer,
+- At head-contact range the trainer bails out for `1.6 s` against a peer,
   larger snake or booster, so it cannot turn straight back into the body it
   just escaped. A genuinely tiny snake is still fair game.
 - Fixed the v0.2.1 body-ramming failure: a long snake's body is collected even
@@ -236,23 +247,34 @@ becomes an urgent threat, the hunt is abandoned first.
 | **coil** | A close, equal-or-faster target is not fleeing | Spirals at a stand-off distance to make it turn into your body. |
 | **cut** | Target is head-on, you are ahead of it, or it is slow and close | Cuts across its nose; a smaller snake that hits your trailing body dies. |
 | **bait** | A fast or boosting snake of equal-or-smaller length is chasing from behind | Holds the current line so the trailing body stays in the chaser's path; no boost. |
-| **bailout** | Head-contact range against a peer, larger snake or booster | Abandons the hunt for `1.2 s` and lets the body planner handle the threat. |
+| **bailout** | Head-contact range against a peer, larger snake or booster | Abandons the hunt for `1.6 s` and lets the body planner handle the threat. |
 
-A target is not worth a head-on coin flip. When the target is within
-`self radius + target radius + 70` and is at least `max(16, 75% of self length)`
-or boosting, the trainer bails out and does not reacquire it for `1.2 s`. A
-tail-bait chaser already behind the player keeps the held line, because the
-trailing body is the trap; a genuinely tiny snake also keeps the close cut,
+A target is not worth a head-on coin flip. The close bailout uses the player
+radius plus the target radius plus a contact margin, and does not reacquire
+that target for `1.6 s`:
+
+- **Peer:** target length at least `max(16, 75% of self length)`. The normal
+  closing margin is `70` units.
+- **Fast peer:** target length at least `max(5, 55% of self length)` and speed
+  at least `92%` of the player's base speed. A target closing toward the player
+  gets a `240`-unit margin, so the cut is abandoned while an escape line still
+  exists.
+- **Booster:** a boosting target closing toward the player gets a `150`-unit
+  margin.
+
+A tail-bait chaser already behind the player is exempt because the trailing
+body is the trap. A genuinely tiny, slower snake also keeps the close cut,
 because its short body cannot cover the same distance. If the best rollout is
-still below the normal `18`-unit clearance, the trainer drops the hunt and
-treats the situation as a survival problem. When an urgent head-on threat is inside `340` units, the rollout uses a
-short `40 ms` panic reaction instead of the normal `240 ms` control lag so it
-can still turn away.
+still below half the normal `18`-unit danger clearance, the trainer drops the
+hunt and treats the situation as a survival problem. When an urgent head-on
+threat is inside `340` units, the rollout uses a short `40 ms` panic reaction
+instead of the normal `240 ms` control lag so it can still turn away.
 
 A confirmed kill, or any visible death within `900` units, creates a feast site
-for `10 s`. Large pellets around that site are weighted much more heavily than
+for `12 s`. Large pellets around that site are weighted much more heavily than
 ordinary food. A dense cluster of big pellets can also be recognised as a
-corpse without seeing the kill.
+corpse without seeing the kill. A corpse expires normally; it is not re-created
+just because the local field is still dense.
 
 ---
 
@@ -274,8 +296,9 @@ rollout described in the main project docs. It reads the game's own state
 - Arena-wall clearance, crowd pressure, and a committed escape heading.
 - Soft food attraction, weighted by pellet size, with corpse pellets and tight
   pellet clusters boosted.
-- A map-frontier vote for unexplored ground when the local farm is thin and no
-  hunt/feast is active. The frontier is only a score; the rollout can refuse it.
+- A map-frontier vote for unexplored ground when the local farm is thin, no
+  hunt/feast is active and the trainer is not escaping. The frontier is only a
+  score; the rollout can refuse it.
 - Hunt scoring for lead-intercept, chase, coil, cut-across and body-trap paths.
   Target avoidance is softened above `26` units so a cut can close, but below
   the `18`-unit danger margin it becomes a hard safety penalty again.
@@ -288,29 +311,33 @@ for experimenting with a live session, not for unattended leaderboard farming.
 Raise **Safety** if it feels reckless, lower **Aggro** to reduce hunting, or
 turn **Hunt snakes** off entirely.
 
-### v0.3.0 live validation
+### Live validation
 
-The test harness injected the trainer before the run started and took over the
-spawned snake. The production trainer did not start, navigate or restart any
-run.
+The test harness injects the trainer after the snake is live and clicks
+**Take over**. The production trainer itself never starts, navigates or
+restarts a run.
 
 | Result | Observation |
 | --- | --- |
-| Best v0.3.0 run | `180 s`, game-displayed length `666`, trainer score `647`, trainer length `39`, rank `70` of `319`; harness released it while still alive. |
+| Best v0.4.0 run | `180.8 s`, trainer length `36`, game-displayed length/score `585`, rank `51`, `0` confirmed kills; harness released it while still alive. |
+| Earlier v0.4.0 run | Ended at `66.6 s`; the trainer stopped and stayed armed. The final panel values were not captured cleanly because the death screen cleared the live fields. |
+| Best v0.3.0 run | `180 s`, game-displayed length/score `666`, trainer score `647`, trainer length `39`, rank `70` of `319`; released while still alive. |
 | Death screen | A separate v0.3.0 run ended at game final length `318`; the trainer stopped, stayed armed and did not click **Play Again**. |
-| Kills | No live kill was confirmed. Fleeing equal-speed targets, perfect kiters and boosting near-peers are still the weak case. |
-| Tail-bait attempt | A later `63 s` run used the tail-bait line but ended against a larger boosting snake; no live kill was confirmed. |
-| Prior comparison | The earlier `213` result was beaten on the game-displayed length/score metric, but rank `1` was not reached. |
+| Kills | No live kill has been confirmed. Fleeing equal-speed targets, perfect kiters and boosting near-peers are still the weak case. |
+| Map | `1.9%` coverage (`13` of `673` cells) in the best v0.4.0 run. The frontier is a calm-area vote; repeated crowd pressure kept the run farming locally. |
 
 | Screenshot | What it shows |
 | --- | --- |
+| [`assets/trainer_v040_headed_180s.png`](../../assets/trainer_v040_headed_180s.png) | Best v0.4.0 run at `180 s`: trainer length `36`, displayed length/score `585`, rank `51`. |
+| [`assets/trainer_v040_headed_release.png`](../../assets/trainer_v040_headed_release.png) | The same run after **Release**: control returns without restarting. |
 | [`assets/trainer_v030_prearm3_start.png`](../../assets/trainer_v030_prearm3_start.png) | v0.3.0 takeover on a fresh run at length `2` with nearby threats and the `2,400` radar. |
-| [`assets/trainer_v030_prearm3_end.png`](../../assets/trainer_v030_prearm3_end.png) | The `180 s` run at trainer length `39`, game length `666`, rank `70`. |
+| [`assets/trainer_v030_prearm3_end.png`](../../assets/trainer_v030_prearm3_end.png) | The `180 s` v0.3.0 run at trainer length `39`, displayed length `666`, rank `70`. |
 | [`assets/trainer_v030_prearm3_death.png`](../../assets/trainer_v030_prearm3_death.png) | Game final length `318`; trainer armed and waiting, **Play Again** untouched. |
 
-The live harness used bundled Chromium because the installed Edge channel
-blocked the local script fetch. The offline suite ran in both installed Chrome
-and Edge.
+The best v0.4.0 live run used headed Chrome. Edge automation was blocked by the
+site's local-script fetch (`net::ERR_BLOCKED_BY_CLIENT`), while the offline Edge
+suite runs normally. Rank `1` was not reached, and the displayed length target
+was exceeded in v0.3.0 but not in every run.
 
 ---
 
@@ -390,9 +417,8 @@ Start a run manually. The panel requires `window.playing` and a positive
 `window.slither.id`. It will not press Play for you.
 
 **The snake does not move after Take over.**
-Another planner (for example the headless `bot_v2.js`) may also be writing
-`xm`/`ym`. Run only one planner at a time. Reload the page to clear the other
-one.
+Another userscript or injected planner may also be writing `xm`/`ym`. Run only
+one planner at a time. Reload the page to clear the other one.
 
 **Clicking the panel boosts the snake.**
 That should not happen. Panel events are shielded whether takeover is active

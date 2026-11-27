@@ -94,7 +94,7 @@ def main() -> int:
                 # without a cut boost; the early target is short and the
                 # first cut can overshoot, so give it a little more margin.
                 if mode == "hunt_early":
-                    seconds = max(args.seconds, 16.0)
+                    seconds = max(args.seconds, 20.0)
                 elif mode in ("hunt_peer", "hunt_equal", "hunt_evasive", "hunt_evasive_peer"):
                     seconds = max(args.seconds, 12.0)
                 elif mode in ("tail_boost", "tail_chase", "tail_equal", "map_probe"):

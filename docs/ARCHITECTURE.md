@@ -115,6 +115,11 @@ Defined in the tunables block in `panel/trainer/src/00-foundation.js`.
 | `MAP_BIAS` | `34` | Maximum calm-area frontier vote |
 | `MAP_CELL` | `620` | Coverage grid cell size |
 | `MAP_WALL_PAD` | `500` | Grid cells excluded near the wall |
+| `BODY_CAUTION` | `30` | No-target clearance below which farming is suppressed |
+| `BODY_CAUTION_MS` | `900` | How long the low-clearance caution lasts |
+| `PEER_BAIL_RATIO` | `0.55` | Fast-peer length ratio for the early bailout |
+| `PEER_BAIL_MARGIN` | `240` | Contact margin against a closing fast peer |
+| `BOOST_BAIL_MARGIN` | `150` | Contact margin against a closing booster |
 
 ## Feeding
 
@@ -123,9 +128,13 @@ Defined in the tunables block in `panel/trainer/src/00-foundation.js`.
 - A 3x3 spatial bucket pass adds a local density multiplier, so a pellet stream
   is worth more than an isolated pellet of the same size.
 - Large pellets and corpse-cluster pellets are weighted super-linearly.
-- A visible kill or a dense big-pellet cluster creates a timed feast site.
+- A visible kill or a dense big-pellet cluster creates a timed feast site for
+  up to `12 s`.
 - Food pull defaults to `1.15`; while a hunt is live it is cut to `8%` so a
   pellet ring cannot pull the snake off a committed kill.
+- When there is no active hunt and the previous rollout had less than `30` units
+  of clearance, a `900 ms` body-caution state reduces food/farm attraction so
+  the next frame does not steer back into the same scrape.
 
 ## Hunting
 
@@ -135,9 +144,11 @@ Defined in the tunables block in `panel/trainer/src/00-foundation.js`.
   skipped.
 - A same-size or smaller fast/boosting chaser behind the player is tail-baited:
   the trainer holds its line and lets the chaser's head hit the trailing body.
-- Close head-contact against a peer, larger snake or booster triggers a `1.2 s`
-  bailout and a short reacquisition cooldown. A tail-bait chaser is exempt
-  because the body is the trap.
+- Close head-contact against a peer, larger snake or booster triggers a `1.6 s`
+  bailout and a short reacquisition cooldown. A fast peer that is at least `55%`
+  of the player's length and closing at `92%` of base speed gets a `240`-unit
+  margin; a closing booster gets `150` units; other peer contacts use `70`.
+  A tail-bait chaser is exempt because the body is the trap.
 - Maneuvers: `hunt` (lead-intercept), `chase` (flank and close), `coil`
   (stand-off), `cut` (cross the nose), `bait` (hold for the body trap).
 - A target that boosts away or becomes uncatchable is dropped rather than chased
@@ -154,10 +165,14 @@ The map layer marks the sampled trail on a coarse grid inside the arena wall
 - visited and total cells;
 - the current frontier target and distance.
 
-The frontier vote is active only when no hunt or feast is running, danger is
-calm, and the nearby food field is thin. The **Explore** slider scales that
-vote. The map is built only from state the client already received; it does not
-reveal hidden snakes or food and does not query the server.
+The frontier vote is active only when no hunt or feast is running, the trainer
+is not escaping, danger is calm, and the nearby food field is thin. The
+**Explore** slider scales that vote. The visited grid is keyed to the actual
+arena geometry used to build it, with a `650`-unit tolerance; this absorbs live
+`flux_grd` jitter without resetting coverage on every update. A real arena
+change still starts a fresh grid. The map is built only from state the client
+already received; it does not reveal hidden snakes or food and does not query
+the server.
 
 ## Takeover and input
 

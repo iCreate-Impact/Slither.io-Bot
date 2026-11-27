@@ -11,7 +11,9 @@
     cell: TUNE.MAP_CELL,
     originX: 0,
     originY: 0,
-    arenaKey: '',
+    arenaCx: 0,
+    arenaCy: 0,
+    arenaR: 0,
     meId: null,
     lastSampleAt: 0,
     lastX: null,
@@ -25,13 +27,16 @@
     heading: null
   };
 
-  function mapArenaKey(arena) {
-    // flux_grd can jitter by a few units as the client receives updates.
-    // The old one-unit key reset the grid on almost every frame, so live
-    // coverage never accumulated and the frontier never pulled the snake.
-    // Bucket the arena geometry instead; a real arena change still resets it.
-    return Math.round(arena.cx / 250) + ':' +
-      Math.round(arena.cy / 250) + ':' + Math.round(arena.r / 250);
+  function mapArenaStable(arena) {
+    // flux_grd can drift by more than a grid bucket as the client receives
+    // updates. Rounding a key still crossed boundaries and reset live
+    // coverage back to one cell. Compare against the actual geometry used to
+    // build the grid instead, with a tolerance wider than the jitter but
+    // small enough that a real arena change still starts a fresh map.
+    var tolerance = Math.max(650, MAP.cell);
+    return Math.abs(arena.cx - MAP.arenaCx) <= tolerance &&
+      Math.abs(arena.cy - MAP.arenaCy) <= tolerance &&
+      Math.abs(arena.r - MAP.arenaR) <= tolerance;
   }
 
   function mapReset(me, arena, now) {
@@ -45,7 +50,9 @@
     MAP.cell = cell;
     MAP.originX = arena.cx - (span * cell) / 2;
     MAP.originY = arena.cy - (span * cell) / 2;
-    MAP.arenaKey = mapArenaKey(arena);
+    MAP.arenaCx = arena.cx;
+    MAP.arenaCy = arena.cy;
+    MAP.arenaR = arena.r;
     MAP.meId = me && me.id !== undefined ? String(me.id) : null;
     MAP.lastSampleAt = 0;
     MAP.lastX = me ? num(me.xx, arena.cx) : arena.cx;
@@ -105,9 +112,8 @@
   }
 
   function mapSample(me, arena, now) {
-    var key = mapArenaKey(arena);
     var id = me && me.id !== undefined ? String(me.id) : null;
-    if (!MAP.grid || MAP.arenaKey !== key || MAP.meId !== id) {
+    if (!MAP.grid || !mapArenaStable(arena) || MAP.meId !== id) {
       mapReset(me, arena, now);
     }
     if (!me) return MAP;

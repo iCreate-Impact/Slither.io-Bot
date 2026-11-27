@@ -59,7 +59,10 @@ margins.
 - Default food pull is `1.15`; food attraction is cut to `8%` while a hunt is
   live so a dense farm ring cannot pull the snake off a committed kill.
 - Large pellets and corpse sites keep super-linear value; a detected corpse
-  cluster still creates a timed feast mode.
+  cluster still creates a timed feast mode of up to `12 s`.
+- A no-target frame below `30` units of clearance arms a `900 ms` body caution
+  that suppresses farming. It is not applied while a hunt is deliberately
+  committing to a close cut.
 
 ## Hunting layer
 
@@ -69,18 +72,23 @@ margins.
 - Equal-size chasers behind the player can be tail-baited. The kill comes from
   the chaser's head meeting the body already behind the player, not from a
   head-on trade.
-- Close-range contacts against peers and larger snakes still trigger the
-  `1.2 s` bailout; a head-on coin flip is not a kill plan.
+- Close-range contacts against peers, larger snakes and boosters trigger the
+  `1.6 s` bailout; a head-on coin flip is not a kill plan.
+- A fast peer at least `55%` of the player's length and closing at `92%` of base
+  speed uses a `240`-unit contact margin; a closing booster uses `150`, and a
+  slower peer keeps the normal `70`-unit close cut.
 - Cut, chase and peer-target boosts are gated by clearance and wall margin.
 
 ## Map layer
 
 `15-map.js` keeps a coarse grid of the arena within `500` units of the wall. It
 marks the trail between samples, reports coverage in the panel, and chooses the
-nearest unvisited frontier. The frontier heading becomes a planner vote only
-when:
+nearest unvisited frontier. The grid is anchored to the actual arena geometry
+and accepts a `650`-unit drift tolerance, so live `flux_grd` jitter does not
+reset coverage. The frontier heading becomes a planner vote only when:
 
 - no hunt target or feast is active;
+- the trainer is not escaping;
 - danger is not urgent and the threat level is calm;
 - the nearby food field is thin enough that a sweep is worth the time.
 

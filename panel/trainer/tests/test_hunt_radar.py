@@ -280,8 +280,11 @@ def main():
         )
         page.evaluate(
             """() => {
-              window.flux_grd += 31;
-              window.real_flux_grd += 17;
+              // A drift large enough to cross the old 250-unit bucket key,
+              // but inside the map's actual-geometry tolerance. Live arena
+              // updates routinely moved the radius by hundreds of units.
+              window.flux_grd += 500;
+              window.real_flux_grd += 540;
             }"""
         )
         page.wait_for_timeout(320)

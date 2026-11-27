@@ -127,6 +127,7 @@
     state.escapeHeading = null;
     state.escapeThreatId = null;
     state.escapeUntil = 0;
+    state.bodyCautionUntil = 0;
     state.migrateHeading = null;
     state.migrateUntil = 0;
     if (full) {

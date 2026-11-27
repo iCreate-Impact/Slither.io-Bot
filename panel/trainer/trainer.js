@@ -74,7 +74,16 @@
     FOOD_CLUSTER_BONUS: 0.16,
     CORPSE_RADIUS: 360,
     CORPSE_MS: 12000,
+    // A dense local cluster can re-arm corpse mode forever. After one feast,
+    // give the map a short clear window so the frontier can actually pull the
+    // snake out of the same pocket before another cluster takes over.
+    FEAST_COOLDOWN_MS: 6500,
     CORPSE_WEIGHT: 12,
+    // A positive clearance below this is still a scrape: the next server
+    // step or a body wiggle can close the gap. Feast/farm must not keep
+    // pulling the nose back into that pocket; leave it for a moment first.
+    BODY_CAUTION: 30,
+    BODY_CAUTION_MS: 900,
     DANGER_CLEAR: 18,
     BOOST_CLEAR: 12,
     BOOST_MS: 800,
@@ -96,6 +105,13 @@
     HUNT_MAX_RATIO: 1.0,
     HUNT_BOOST_RATIO: 1.0,
     TAIL_BAIT_RATIO: 1.0,
+    // Equal-sized prey is allowed only from the side or as a tail bait. A
+    // peer that is already nose-to-nose must be dropped much earlier than a
+    // genuinely tiny snake: at equal speed the closing distance is a coin
+    // flip, and a late bailout still puts two heads inside the same circle.
+    PEER_BAIL_RATIO: 0.55,
+    PEER_BAIL_MARGIN: 240,
+    BOOST_BAIL_MARGIN: 150,
     HUNT_MIN_DIST: 75,
     HUNT_MAX_DIST: 900,
     HUNT_CROWD_RADIUS: 520,
@@ -242,6 +258,7 @@
     escapeHeading: null,
     escapeThreatId: null,
     escapeUntil: 0,
+    bodyCautionUntil: 0,
     migrateHeading: null,
     migrateUntil: 0,
     danger: 0,
@@ -253,6 +270,7 @@
     huntCooldownUntil: 0,
     kills: 0,
     corpse: null,
+    feastCooldownUntil: 0,
     deadIds: {},
     coverage: 0,
     mapVisited: 0,
@@ -538,6 +556,7 @@
 
   function detectCorpse(foods, now) {
     if (state.corpse && now < state.corpse.until) return;
+    if (now < state.feastCooldownUntil) return;
     var big = [];
     for (var i = 0; i < foods.length; i++) {
       var f = foods[i];
@@ -579,7 +598,9 @@
     cell: TUNE.MAP_CELL,
     originX: 0,
     originY: 0,
-    arenaKey: '',
+    arenaCx: 0,
+    arenaCy: 0,
+    arenaR: 0,
     meId: null,
     lastSampleAt: 0,
     lastX: null,
@@ -593,13 +614,16 @@
     heading: null
   };
 
-  function mapArenaKey(arena) {
-    // flux_grd can jitter by a few units as the client receives updates.
-    // The old one-unit key reset the grid on almost every frame, so live
-    // coverage never accumulated and the frontier never pulled the snake.
-    // Bucket the arena geometry instead; a real arena change still resets it.
-    return Math.round(arena.cx / 250) + ':' +
-      Math.round(arena.cy / 250) + ':' + Math.round(arena.r / 250);
+  function mapArenaStable(arena) {
+    // flux_grd can drift by more than a grid bucket as the client receives
+    // updates. Rounding a key still crossed boundaries and reset live
+    // coverage back to one cell. Compare against the actual geometry used to
+    // build the grid instead, with a tolerance wider than the jitter but
+    // small enough that a real arena change still starts a fresh map.
+    var tolerance = Math.max(650, MAP.cell);
+    return Math.abs(arena.cx - MAP.arenaCx) <= tolerance &&
+      Math.abs(arena.cy - MAP.arenaCy) <= tolerance &&
+      Math.abs(arena.r - MAP.arenaR) <= tolerance;
   }
 
   function mapReset(me, arena, now) {
@@ -613,7 +637,9 @@
     MAP.cell = cell;
     MAP.originX = arena.cx - (span * cell) / 2;
     MAP.originY = arena.cy - (span * cell) / 2;
-    MAP.arenaKey = mapArenaKey(arena);
+    MAP.arenaCx = arena.cx;
+    MAP.arenaCy = arena.cy;
+    MAP.arenaR = arena.r;
     MAP.meId = me && me.id !== undefined ? String(me.id) : null;
     MAP.lastSampleAt = 0;
     MAP.lastX = me ? num(me.xx, arena.cx) : arena.cx;
@@ -673,9 +699,8 @@
   }
 
   function mapSample(me, arena, now) {
-    var key = mapArenaKey(arena);
     var id = me && me.id !== undefined ? String(me.id) : null;
-    if (!MAP.grid || MAP.arenaKey !== key || MAP.meId !== id) {
+    if (!MAP.grid || !mapArenaStable(arena) || MAP.meId !== id) {
       mapReset(me, arena, now);
     }
     if (!me) return MAP;
@@ -1407,10 +1432,21 @@
     var candidates = [];
     var i;
 
+    // Previous-tick clearance is a useful early warning that the current
+    // lane is only just clear. A little hysteresis keeps the trainer from
+    // flipping back into a corpse pocket the instant one frame looks safe.
+    if (state.clearance !== null && state.clearance < TUNE.BODY_CAUTION) {
+      state.bodyCautionUntil = now + TUNE.BODY_CAUTION_MS;
+    }
+    var bodyCautionRaw = now < state.bodyCautionUntil;
+
     var danger = assessDanger(me, threats, arena);
     state.danger = danger.level;
     state.nearest = danger.nearest;
-    if (state.corpse && now >= state.corpse.until) state.corpse = null;
+    if (state.corpse && now >= state.corpse.until) {
+      state.corpse = null;
+      state.feastCooldownUntil = now + TUNE.FEAST_COOLDOWN_MS;
+    }
     detectCorpse(foods, now);
     // Keep the coarse map warm every tick, even while hunting. The frontier
     // heading only votes when the local area is calm and no target/feast is
@@ -1421,20 +1457,38 @@
     var target = selectHuntTarget(me, threats, arena, now);
     var selfLen = Math.max(0, num(me.sct, 0));
     var tailBait = target ? isTailBait(me, target, selfLen) : false;
-    if (target && !tailBait &&
-        target.d < selfR + snakeRadius(target) + 70 &&
-        (target.sct >= Math.max(16, selfLen * 0.75) || target.boost)) {
-      // Head-to-head at this range is a coin flip: our head can touch the
-      // target body just as easily as its head can touch ours. Bail out,
-      // let the target run into the body behind us, and do not reacquire it
-      // for a moment. A genuinely tiny snake has a short body and cannot
-      // cover the same distance, so the close cut is still worth taking.
-      state.huntCooldownId = String(target.id);
-      state.huntCooldownUntil = now + 1200;
-      target = null;
-      state.huntTarget = null;
-      state.huntTargetId = null;
-      state.boostUntil = 0;
+    if (target) {
+      var targetToMe = Math.atan2(me.yy - target.y, me.xx - target.x);
+      var targetAtUs = Math.cos(angleDiff(target.ang, targetToMe)) > 0.1;
+      var targetToward = target.speed *
+        Math.cos(angleDiff(target.ang, targetToMe));
+      var closingAtUs = targetAtUs && targetToward > Math.max(40, baseSpeed * 0.15);
+      var peerTarget = target.sct >= Math.max(16, selfLen * 0.75);
+      var fastPeer = target.sct >= Math.max(5, selfLen * TUNE.PEER_BAIL_RATIO) &&
+        target.speed >= baseSpeed * 0.92;
+      var bailMargin = closingAtUs ?
+        (fastPeer ? TUNE.PEER_BAIL_MARGIN :
+          (target.boost ? TUNE.BOOST_BAIL_MARGIN : 70)) : 70;
+      if (!tailBait &&
+          target.d < selfR + snakeRadius(target) + bailMargin &&
+          (peerTarget || fastPeer || target.boost)) {
+        // Head-to-head at this range is a coin flip: our head can touch the
+        // target body just as easily as its head can touch ours. Bail out,
+        // let the target run into the body behind us, and do not reacquire it
+        // for a moment. A genuinely tiny snake has a short body and cannot
+        // cover the same distance, so the close cut is still worth taking.
+        // A peer that is closing toward us at near our speed is not tiny:
+        // bail while there is still time for the planner to leave its line
+        // instead of waiting for the 70-unit contact margin. This is the live
+        // peer head-on that killed early runs while it was still nominally
+        // hunting.
+        state.huntCooldownId = String(target.id);
+        state.huntCooldownUntil = now + 1600;
+        target = null;
+        state.huntTarget = null;
+        state.huntTargetId = null;
+        state.boostUntil = 0;
+      }
     }
     var modeDanger = danger;
     if (target) {
@@ -1496,6 +1550,12 @@
         }
       }
     }
+
+    // Body caution is for farming/feasting, not for an active hunt. A close
+    // cut routinely sits inside the 30-unit scrape band; forcing escape mode
+    // there would turn every committed kill into a stalemate. The hunt's own
+    // close-clearance bailout remains in force below.
+    var bodyCaution = !target && bodyCautionRaw;
 
     var targetKey = target ? String(target.id) : null;
     var bodyPoints = buildBodyPoints(threats, targetKey);
@@ -1613,6 +1673,12 @@
       // becomes a real vote only when the nearby field is thin.
       mapWeight = state.settings.explore *
         clamp(0.9 - nearFood * 0.02, 0.25, 0.9);
+      // During the post-feast cooldown, a dense local field would otherwise
+      // keep the weight at its floor and the snake would circle the same
+      // pocket. Make the clear window an actual sweep vote.
+      if (now < state.feastCooldownUntil) {
+        mapWeight = Math.max(mapWeight, state.settings.explore * 0.75);
+      }
     }
 
     var ctx = {
@@ -1628,7 +1694,7 @@
       maneuver: target ? target.maneuver : null,
       huntSide: target ? target.huntSide : 1,
       aggression: clamp(num(state.settings.aggression, 1), 0, 2),
-      escape: modeDanger.urgent || modeDanger.level > 0.55,
+      escape: modeDanger.urgent || modeDanger.level > 0.55 || bodyCaution,
       emergency: !!(danger.urgent && danger.nearest && danger.nearest.d < 340),
       danger: modeDanger,
       nearest: modeDanger.nearest || danger.nearest,
@@ -1687,7 +1753,7 @@
     }
 
     var mode = 'cruise';
-    if (best.minClear < 0 || modeDanger.urgent) mode = 'escape';
+    if (bodyCaution || modeDanger.urgent) mode = 'escape';
     else if (modeDanger.level > 0.55) mode = 'danger';
     else if (target) mode = target.maneuver;
     else if (state.corpse && state.settings.foodPull > 0) mode = 'feast';
@@ -1917,7 +1983,10 @@
     var selfBody = collectSelfBody(me);
     var foods = collectFoods(me, Math.max(TUNE.FOOD_RANGE, state.settings.radarRange),
       TUNE.FOOD_RADAR_POINTS);
-    if (state.corpse && now >= state.corpse.until) state.corpse = null;
+    if (state.corpse && now >= state.corpse.until) {
+      state.corpse = null;
+      state.feastCooldownUntil = now + TUNE.FEAST_COOLDOWN_MS;
+    }
     mapSample(me, arena, now);
     mapChooseFrontier(me, arena, now);
     var danger = assessDanger(me, threats, arena);
@@ -2691,11 +2760,13 @@
     state.escapeHeading = null;
     state.escapeThreatId = null;
     state.escapeUntil = 0;
+    state.bodyCautionUntil = 0;
     state.migrateHeading = null;
     state.migrateUntil = 0;
     if (full) {
       state.kills = 0;
       state.corpse = null;
+      state.feastCooldownUntil = 0;
       state.deadIds = {};
       state.danger = 0;
       state.nearest = null;

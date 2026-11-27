@@ -75,6 +75,11 @@
     CORPSE_RADIUS: 360,
     CORPSE_MS: 12000,
     CORPSE_WEIGHT: 12,
+    // A positive clearance below this is still a scrape: the next server
+    // step or a body wiggle can close the gap. Feast/farm must not keep
+    // pulling the nose back into that pocket; leave it for a moment first.
+    BODY_CAUTION: 30,
+    BODY_CAUTION_MS: 900,
     DANGER_CLEAR: 18,
     BOOST_CLEAR: 12,
     BOOST_MS: 800,
@@ -96,6 +101,13 @@
     HUNT_MAX_RATIO: 1.0,
     HUNT_BOOST_RATIO: 1.0,
     TAIL_BAIT_RATIO: 1.0,
+    // Equal-sized prey is allowed only from the side or as a tail bait. A
+    // peer that is already nose-to-nose must be dropped much earlier than a
+    // genuinely tiny snake: at equal speed the closing distance is a coin
+    // flip, and a late bailout still puts two heads inside the same circle.
+    PEER_BAIL_RATIO: 0.55,
+    PEER_BAIL_MARGIN: 240,
+    BOOST_BAIL_MARGIN: 150,
     HUNT_MIN_DIST: 75,
     HUNT_MAX_DIST: 900,
     HUNT_CROWD_RADIUS: 520,
@@ -242,6 +254,7 @@
     escapeHeading: null,
     escapeThreatId: null,
     escapeUntil: 0,
+    bodyCautionUntil: 0,
     migrateHeading: null,
     migrateUntil: 0,
     danger: 0,

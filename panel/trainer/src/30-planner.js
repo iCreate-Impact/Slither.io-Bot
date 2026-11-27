@@ -299,6 +299,14 @@
     var candidates = [];
     var i;
 
+    // Previous-tick clearance is a useful early warning that the current
+    // lane is only just clear. A little hysteresis keeps the trainer from
+    // flipping back into a corpse pocket the instant one frame looks safe.
+    if (state.clearance !== null && state.clearance < TUNE.BODY_CAUTION) {
+      state.bodyCautionUntil = now + TUNE.BODY_CAUTION_MS;
+    }
+    var bodyCautionRaw = now < state.bodyCautionUntil;
+
     var danger = assessDanger(me, threats, arena);
     state.danger = danger.level;
     state.nearest = danger.nearest;
@@ -313,20 +321,38 @@
     var target = selectHuntTarget(me, threats, arena, now);
     var selfLen = Math.max(0, num(me.sct, 0));
     var tailBait = target ? isTailBait(me, target, selfLen) : false;
-    if (target && !tailBait &&
-        target.d < selfR + snakeRadius(target) + 70 &&
-        (target.sct >= Math.max(16, selfLen * 0.75) || target.boost)) {
-      // Head-to-head at this range is a coin flip: our head can touch the
-      // target body just as easily as its head can touch ours. Bail out,
-      // let the target run into the body behind us, and do not reacquire it
-      // for a moment. A genuinely tiny snake has a short body and cannot
-      // cover the same distance, so the close cut is still worth taking.
-      state.huntCooldownId = String(target.id);
-      state.huntCooldownUntil = now + 1200;
-      target = null;
-      state.huntTarget = null;
-      state.huntTargetId = null;
-      state.boostUntil = 0;
+    if (target) {
+      var targetToMe = Math.atan2(me.yy - target.y, me.xx - target.x);
+      var targetAtUs = Math.cos(angleDiff(target.ang, targetToMe)) > 0.1;
+      var targetToward = target.speed *
+        Math.cos(angleDiff(target.ang, targetToMe));
+      var closingAtUs = targetAtUs && targetToward > Math.max(40, baseSpeed * 0.15);
+      var peerTarget = target.sct >= Math.max(16, selfLen * 0.75);
+      var fastPeer = target.sct >= Math.max(5, selfLen * TUNE.PEER_BAIL_RATIO) &&
+        target.speed >= baseSpeed * 0.92;
+      var bailMargin = closingAtUs ?
+        (fastPeer ? TUNE.PEER_BAIL_MARGIN :
+          (target.boost ? TUNE.BOOST_BAIL_MARGIN : 70)) : 70;
+      if (!tailBait &&
+          target.d < selfR + snakeRadius(target) + bailMargin &&
+          (peerTarget || fastPeer || target.boost)) {
+        // Head-to-head at this range is a coin flip: our head can touch the
+        // target body just as easily as its head can touch ours. Bail out,
+        // let the target run into the body behind us, and do not reacquire it
+        // for a moment. A genuinely tiny snake has a short body and cannot
+        // cover the same distance, so the close cut is still worth taking.
+        // A peer that is closing toward us at near our speed is not tiny:
+        // bail while there is still time for the planner to leave its line
+        // instead of waiting for the 70-unit contact margin. This is the live
+        // peer head-on that killed early runs while it was still nominally
+        // hunting.
+        state.huntCooldownId = String(target.id);
+        state.huntCooldownUntil = now + 1600;
+        target = null;
+        state.huntTarget = null;
+        state.huntTargetId = null;
+        state.boostUntil = 0;
+      }
     }
     var modeDanger = danger;
     if (target) {
@@ -388,6 +414,12 @@
         }
       }
     }
+
+    // Body caution is for farming/feasting, not for an active hunt. A close
+    // cut routinely sits inside the 30-unit scrape band; forcing escape mode
+    // there would turn every committed kill into a stalemate. The hunt's own
+    // close-clearance bailout remains in force below.
+    var bodyCaution = !target && bodyCautionRaw;
 
     var targetKey = target ? String(target.id) : null;
     var bodyPoints = buildBodyPoints(threats, targetKey);
@@ -520,7 +552,7 @@
       maneuver: target ? target.maneuver : null,
       huntSide: target ? target.huntSide : 1,
       aggression: clamp(num(state.settings.aggression, 1), 0, 2),
-      escape: modeDanger.urgent || modeDanger.level > 0.55,
+      escape: modeDanger.urgent || modeDanger.level > 0.55 || bodyCaution,
       emergency: !!(danger.urgent && danger.nearest && danger.nearest.d < 340),
       danger: modeDanger,
       nearest: modeDanger.nearest || danger.nearest,
@@ -579,7 +611,7 @@
     }
 
     var mode = 'cruise';
-    if (best.minClear < 0 || modeDanger.urgent) mode = 'escape';
+    if (bodyCaution || modeDanger.urgent) mode = 'escape';
     else if (modeDanger.level > 0.55) mode = 'danger';
     else if (target) mode = target.maneuver;
     else if (state.corpse && state.settings.foodPull > 0) mode = 'feast';

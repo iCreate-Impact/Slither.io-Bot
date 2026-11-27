@@ -1,205 +1,197 @@
-# Contributing to Slither.io Bot
+# Contributing
 
-Thanks for taking a look. This project welcomes contributors, and the most valuable help is not only code: reproducible session logs, death recordings, server surveys and focused geometry tests all move the bot forward.
+Contributions are welcome. This project is a browser-side trainer for
+[slither.io](https://slither.io), not a game server or a headless driver. Keep
+changes focused on planning, collision avoidance, feeding, hunting, map use,
+the panel and the test harness.
 
-**Maintainer:** ichidera
+## Before you start
 
-By participating you agree to follow [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+- Open an issue for large planner or behaviour changes so the scenario and
+  success criteria can be discussed first.
+- Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
+  [docs/TRAINER_MODULES.md](docs/TRAINER_MODULES.md) and
+  [docs/TRAINER_TESTING.md](docs/TRAINER_TESTING.md).
+- Use only your own runs and do not disrupt other players, the server or the
+  game's normal operation.
+- The production trainer is **takeover-only**. It never launches a browser,
+  navigates, clicks **Play**, reconnects or creates a run. Do not add any of
+  those actions to `panel/trainer/`.
 
----
+## Repository layout
 
-## Where help is most useful
-
-The current focus is **survival**. The longest zero-death run is 15 minutes (length 108, score 2,244), and most runs end in boosted-snake attacks or multi-snake box-ins.
-
-### Good first issues
-
-1. **Result-state log parser:** parse `[DEATH]`, `[START]`, `[KILL]` and end-of-run summaries into a portable table. Use the logs in `docs/PERFORMANCE.md` as fixtures.
-2. **Server picker:** use `probe_tops.py` measurements (`near1k`, `near2k`, `near4k`) instead of `ac` to rank candidate arenas.
-3. **Self-grid replay test:** construct straight, 90°, 180°, 270° and tight coil paths and assert the candidate self-clearance rule.
-4. **Crowded-spawn statistics:** correlate `--start-max-threats` with early deaths and recommend a default.
-5. **Docs reproduction:** run a 10-minute session on a forced server and add the result-state row to `docs/PERFORMANCE.md`.
-
-### Larger features
-
-- **Crowd escape:** model multiple closing heads as a moving cage and pick an escape lane before the planner reaches `safe=0/112`.
-- **Boosted-snake prediction:** improve responses to side and rear attacks from length 60 to 330 boosters and tiny length 2 to 20 boosters.
-- **Safe wall handling:** avoid being pinned against the arena boundary.
-
-Open an issue before a large change so the approach can be discussed. Small, well-tested fixes can go straight to a PR.
-
----
-
-## Scope
-
-This is a research project about planning and collision avoidance. Please don't contribute changes meant to:
-
-- disrupt other players or the game's servers (e.g. running many instances, flooding connections),
-- abuse accounts, or bypass the game's protections,
-- gain leaderboard placement.
-
-Pull requests like that won't be merged. Using bots may break the game's terms of service, so run the bot sparingly and at your own risk.
-
----
-
-## Setup
-
-```bash
-git clone https://github.com/ichidera/Slither.io-Bot.git
-cd Slither.io-Bot
-python3 -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-playwright install chromium
+```text
+panel/trainer/
+  src/                maintained modules; no imports or exports
+  trainer.js          generated single-file bundle
+  build.py            ordered concatenation and --check
+  trainer.user.js     userscript loader
+  bookmarklet.txt     loader for a published copy
+  tests/              offline Playwright suites and FPS benchmark
+panel/cheats/
+  state_probe.js      read-only client-state probe
+docs/                 architecture, modules, testing and performance notes
+assets/               curated screenshots
 ```
 
-No build step is required. The JS planner runs inside Playwright's browser. Node.js is only used for `node --check bot_v2.js` and the optional CI job.
-
-If Chromium is already installed, pass `--browser /path/to/chrome` or set `PLAYWRIGHT_BROWSERS_PATH`.
-
----
-
-## Project layout
-
-| File / dir | What it is |
-| --- | --- |
-| `slither_bot.py` | Production driver. Public names: `BOT_JS`, `chromium_path`, `main`. |
-| `bot_v2.js` | Editable planner. The main target for tuning. |
-| `run_v2.py` | Dev runner. Loads `bot_v2.js` from disk after every death. |
-| `probe_tops.py` | Samples servers and reports nearby-snake density. |
-| `tools/sync_embedded.py` | Syncs (or checks) `bot_v2.js` to the embedded `BOT_JS`. |
-| `recon/` | Standalone read-only probes. Do not write game state from them. |
-| `panel/trainer/` | Browser-injectable panel that takes over a live slither.io tab. Threat-aware radar, smaller-snake hunting and corpse feasts; it never starts a run. |
-| `panel/trainer/tests/` | Offline Playwright collision, takeover, UI and FPS tests. The harness may launch a browser; the production trainer does not. |
-| `docs/` | Architecture, measured results, trainer testing and open problems. |
-| `.github/` | Issue and PR templates and the syntax/sync CI workflow. |
-
----
-
-## Workflow
-
-### Planner changes (`bot_v2.js`)
-
-Use the dev runner so edits take effect without restarting Python:
-
-```bash
-python run_v2.py --headless --seconds 600 --verbose
-```
-
-After a death, the runner reloads `bot_v2.js` from disk. If the change is meant for the production driver, synchronize the embedded copy:
-
-```bash
-python tools/sync_embedded.py
-python tools/sync_embedded.py --check
-```
-
-The sync check must pass before a PR is merged. `BOT_JS` in `slither_bot.py` must be byte-identical to `bot_v2.js`.
-
-### Driver changes (`slither_bot.py`)
-
-Keep `BOT_JS`, `chromium_path()` and `main()` stable. `run_v2.py` and the recon probes import those names.
-
-### Feature flags for A/B tests
-
-Each can be set from the browser devtools or a small Playwright probe:
-
-| Flag | Default | Effect |
-| --- | --- | --- |
-| `window.__slitherHuntCoil` | `true` | Offensive coil acquisition |
-| `window.__slitherHuntBoost` | `true` | Gated boost cut-off |
-| `window.__slitherCorpseSweep` | `true` | Detect and claim rival corpses |
-| `window.__slitherBigRun` | `false` | Historical BIGRUN mode, opt-in only |
-
-Do not enable BIGRUN by default without new A/B evidence. It is associated with more boosted deaths and no reliable growth benefit.
-
----
-
-## Test protocol
-
-A minimal PR needs one comparable run plus the checks below.
-
-```bash
-# 1. Syntax and embedded-planner sync
-python -m py_compile slither_bot.py run_v2.py probe_tops.py recon/*.py tools/*.py
-node --check bot_v2.js
-python tools/sync_embedded.py --check
-
-# 2. Ten-minute live run on a forced server
-python run_v2.py --headless --seconds 600 --verbose \
-  --server 213.159.5.171:444 --start-max-threats 6 --abort-attempts 5
-```
-
-For survival changes, use a longer run when possible. For behaviour changes, run the same server, duration and flags with the feature on and off, otherwise the result isn't a useful comparison.
-
-Trainer-only changes use the offline Playwright suite instead of the Python
-driver. It runs against local mock pages and the installed default Chrome/Edge:
+## Development setup
 
 ```bash
 python -m pip install -r panel/trainer/tests/requirements.txt
-node --check panel/trainer/trainer.js
-python panel/trainer/tests/run_all.py
 ```
 
-Add a focused scenario to `panel/trainer/tests/sim_modes.html` for new movement
-or collision behaviour, and update
-[`docs/TRAINER_TESTING.md`](docs/TRAINER_TESTING.md) when the threat/body model
-changes. The trainer test harness may launch a browser; the production trainer
-must never do so.
+The test harness prefers the installed default browser (Chrome or Edge via
+Playwright channels). Bundled Chromium can be installed only if neither channel
+is available:
 
-Record at least:
+```bash
+python -m playwright install chromium
+```
 
-- result state (`NO-DEATH`, `DIED`, `CANCELLED`, `FILTERED`)
-- server `ip:port`
-- duration and number of starts and deaths
-- best length and displayed score
-- kill count
-- death context (`[THREATS]`: nearby count, clearance, `safe` headings)
+## Change workflow
 
-Add the row to [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
+1. **Edit a source module under `panel/trainer/src/`.** The maintained source is
+   split in dependency order; do not edit the generated `trainer.js` directly.
+2. **Rebuild the bundle.**
 
-### Log tags
+   ```bash
+   python panel/trainer/build.py
+   python panel/trainer/build.py --check
+   node --check panel/trainer/trainer.js
+   ```
 
-| Tag | Meaning |
-| --- | --- |
-| `[PLAN]` | Normal tick: heading, speed, clearance, nearby count |
-| `[RANK]` | Periodic status sample |
-| `[HUNT]` | Target acquired or dropped, with reason |
-| `[KILL]` | Confirmed kill counter |
-| `[CORPSE]` | Corpse detected or claimed |
-| `[REENGAGE]` | Post-kill local target re-engagement |
-| `[FAST]` | Proactive boosted-snake evasion |
-| `[SELFGRID]` | Own body trail entered the collision grid at length 140+ |
-| `[THREATS]` | Death context dump |
-| `[DEATH]` | Real death, score, length |
+3. **Add or update a focused test.** Movement, collision, peer rules, input
+   shielding, map state and UI changes need a scenario in
+   `panel/trainer/tests/sim_modes.html` or an assertion in an existing suite.
+4. **Run the full suites.**
 
----
+   ```bash
+   python panel/trainer/tests/run_all.py
+   TRAINER_BROWSER=msedge python panel/trainer/tests/run_all.py
+   ```
+
+   Expected counts are `31/31` modes, `31/31` takeover checks and `42/42`
+   hunt/radar/map/UI checks per browser. The benchmark is informational.
+5. **Run a live check** when the change affects behaviour rather than only UI or
+   tests. See [Live validation](#live-validation).
+
+## Testing rules
+
+- Offline tests must not connect to slither.io. They load local mock/simulation
+  pages and the generated bundle.
+- The test harness may launch a browser; the trainer itself must not.
+- A scenario must fail for the old behaviour and pass for the fix. Avoid adding
+  a pass/fail scenario whose geometry is effectively unwinnable.
+- Keep deterministic scenarios deterministic. Do not rely on random spawns or a
+  particular server population for an offline assertion.
+- If a short scenario needs extra time for a legitimate cut-and-circle, give it
+  an explicit minimum window rather than weakening the collision assertion.
+- Do not add a retry to hide a flaky scenario; fix the geometry or the timing.
+
+### Useful commands
+
+```bash
+# One mode, headed, longer window
+python panel/trainer/tests/test_modes.py --modes hunt_peer --headed --seconds 10
+
+# One group only
+python panel/trainer/tests/test_modes.py --modes body_far_head,body_many,feast
+
+# Takeover and input shielding
+python panel/trainer/tests/test_takeover.py
+
+# Hunt, radar, map and panel UI
+python panel/trainer/tests/test_hunt_radar.py
+
+# FPS benchmark
+python panel/trainer/tests/bench.py
+```
+
+## Live validation
+
+Live runs are evidence, not a unit test. A useful report includes:
+
+- browser name and version, headed or headless, and commit/version;
+- server population bucket and spawn conditions;
+- duration and whether the run ended by death, release or cancellation;
+- trainer length, displayed length/score, rank and confirmed kills;
+- the death geometry (wall, single head, body, multi-snake box, boosted peer);
+- relevant mode/clearance/threat samples around a death;
+- a curated screenshot when available.
+
+### Manual protocol
+
+1. Open <https://slither.io> yourself and start a run with nickname `test` when
+   a generic nickname is appropriate.
+2. Inject `panel/trainer/trainer.js` through DevTools, or use the userscript.
+3. Click **Take over** and confirm the panel says `Takeover active`.
+4. Let the run continue until a real death or the chosen time limit. Do not
+   click **Play Again** from the trainer; it has no such action.
+5. Release or let death stop control, then record the values above.
+6. Save only curated screenshots. Keep probe logs, traces and temporary death
+   captures out of git; they are covered by `.gitignore`.
+
+A separate local automation harness can start a browser for testing, but it
+must remain outside `panel/trainer/` and must not be required by the production
+trainer. Prefer the installed default browser for parity with the userscript.
+
+## Planner and safety guidelines
+
+- Safety outranks food, map and hunt terms. A hunt may be aggressive, but it
+  must not ignore an imminent wall, a second head, or a closing body.
+- Do not target a snake larger than the player. Peer-sized prey is allowed only
+  under the documented slower/crossing rules.
+- Preserve escape clearance when adding attraction. If a new score term can
+  pull the nose into a negative-clearance pocket, add a test for the conflict.
+- Keep the planner deterministic given the same snapshot and settings; avoid
+  hidden state that makes tests depend on wall-clock randomness.
+- Keep tunables in `00-foundation.js` and name them for their unit and role.
+- Comments should explain *why* a threshold exists, especially when it protects
+  a previous live failure.
 
 ## Code style
 
-- Match the surrounding style. Don't introduce a build system.
-- Keep planner constants in the `// ---- tunables` blocks at the top of `bot_v2.js`.
-- Prefer small pure helpers for geometry so they can be replay-tested.
-- Never remove a survival check to make another behaviour easier to trigger.
-- Keep comments factual, and don't describe something as achieved unless a run proves it.
-- Update `docs/PERFORMANCE.md` and `CHANGELOG.md` with behaviour changes and new measurements.
+- The source fragments share one IIFE. Do not use `import`/`export`, top-level
+  `await`, or module-level syntax that would break concatenation.
+- Match the existing ES5-compatible style (`var`, function declarations) in the
+  trainer source.
+- The panel is rendered in a shadow root. Keep DOM queries scoped to it.
+- Do not add network calls, packet writes, memory writes or edits to another
+  player's state. The only legitimate writes are the game's local steering and
+  boost fields while takeover is active.
+- Restore every handler or global changed during takeover; input shielding must
+  be removable without a reload.
+- Never add `play_btn`, `resetGame`, `connect` or reconnect calls.
 
----
+## Documentation
 
-## Pull requests
+Tracked documentation lives under `docs/` unless it is a top-level project file
+such as `README.md` or `CHANGELOG.md`. Update the relevant document when a
+threshold, scenario, test count or live result changes. Avoid machine-specific
+absolute paths in tracked files. Use relative repository paths.
 
-Start from `main`, keep the diff scoped, and fill in the PR template. A good PR has:
+## Pull request checklist
 
-- [ ] one behaviour change (or one clearly related set of changes)
-- [ ] syntax and embedded-sync checks passing
-- [ ] a 10-minute (or longer) forced-server run
-- [ ] the result state and stats recorded in `docs/PERFORMANCE.md`
-- [ ] a short explanation of the death type being fixed and how it was verified
-- [ ] no leftover debug logs, local paths or generated JSON
+- [ ] Source modules changed; bundle rebuilt with `build.py` and `--check`
+      passes.
+- [ ] `node --check` passes.
+- [ ] Full Chrome suite passes (`31/31`, `31/31`, `42/42`).
+- [ ] Full Edge suite passes (`31/31`, `31/31`, `42/42`).
+- [ ] New behaviour has a focused failing-before/passing-after test.
+- [ ] No production launch/navigation/**Play**/reconnect action was added.
+- [ ] Takeover, release, death and input shielding still work.
+- [ ] Docs and changelog updated; no stale file references or absolute paths.
+- [ ] Live evidence included when behaviour changed, with limitations stated.
+- [ ] Screenshots curated; probe logs/traces not committed.
 
-Large features should be behind a flag until they have an A/B result.
+## Reporting bugs
 
----
+Include the version, browser, exact reproduction steps, expected vs actual
+behaviour, and whether the issue is reproducible offline. For a live death,
+include duration, trainer length, displayed score, rank, kills and the final
+threat/clearance/mode samples. Remove personal data and unrelated local paths.
 
-## Questions
+## License
 
-Open a discussion or issue, or tag **ichidera** in a PR. If you find a repeatable death, attach the command, server, result state and the `[THREATS]` line. That is more useful than a screenshot alone.
+By contributing, you agree that your contribution is licensed under the
+repository's MIT license.

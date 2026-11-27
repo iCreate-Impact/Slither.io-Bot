@@ -56,7 +56,7 @@ includes:
 - rejection of a target that runs directly away at the trainer's speed or
   faster;
 - dropping a locked target that boosts away or becomes an uncatchable runner;
-- a `1.2 s` cooldown after bailing out at head-contact range against a peer,
+- a `1.6 s` cooldown after bailing out at head-contact range against a peer,
   larger snake or booster;
 - tail-bait handling: a smaller chaser behind the player gets a held line so it
   can run into the trailing body, instead of a cut that moves the body away.
@@ -64,15 +64,23 @@ includes:
 The close-pursuit safety rule is:
 
 ```text
-if target.d < selfRadius + targetRadius + 70
+fastPeer = target.sct >= max(5, 0.55 * selfLen)
+           and target.speed >= 0.92 * baseSpeed
+peerTarget = target.sct >= max(16, 0.75 * selfLen)
+bailMargin = closing ? (fastPeer ? 240 : target.boost ? 150 : 70) : 70
+
+if target.d < selfRadius + targetRadius + bailMargin
    and not target.isBehindAndChasing
-   and (target.sct >= max(16, 0.75 * selfLen) or target.boost):
-       drop the hunt for 1200 ms
+   and (peerTarget or fastPeer or target.boost):
+       drop the hunt for 1600 ms
        cancel the hunt boost
 ```
 
 A smaller chaser behind the player is exempt when it is fast or boosting enough
 to catch the tail: the trailing body is the trap and the trainer holds its line.
+The `fastPeer` case was added after a live peer head-on ended a run while the
+trainer was still nominally hunting; a slower peer still gets the normal close
+cut so `hunt_peer` and `hunt_equal` continue to score kills.
 A genuinely tiny snake is exempt because its short body cannot cover the same
 distance. The normal body planner still treats every enemy body as an obstacle.
 
@@ -243,8 +251,10 @@ survival, zero collisions and positive wall clearance, but not a kill. A perfect
 equal-speed kiter can always turn away in open space; the safety regression is
 that the trainer does not cut into its body. `tail_boost` and `tail_chase` cover
 the opposite geometry, a smaller chaser behind the player, and do assert a kill
-by the trailing body. `hunt_early` gets a minimum `16 s` window because the
-first cut can overshoot the short target.
+by the trailing body. `hunt_early` gets a minimum `20 s` window because the
+first cut can overshoot the short target; a `16 s` window occasionally ended
+with the trainer still circling a live target, which was a timing flake rather
+than a collision or target-selection failure.
 
 Representative body minima from the Edge run:
 
@@ -259,34 +269,48 @@ The mock collision radius is the sum of the two body radii. The planner uses an
 additional safety margin, so these minima are not the actual collision
 threshold.
 
-### v0.3.0 live pre-arm runs
+### v0.4.0 live validation
 
-The v0.3.0 harness injected the trainer into the page before clicking the game's
-**Play** button, then took over the spawn immediately. The production trainer
-never started a run, navigated, clicked **Play Again**, or reconnected; only the
-harness did.
+The v0.4.0 harness attached to a manually started run and clicked **Take over**
+after the snake was live. The production trainer never started a run, navigated,
+clicked **Play Again**, or reconnected; only the external harness started the
+browser and the initial game run.
 
-The best run observed:
+The best run observed on the current build:
 
-- `180 s` of live control, released while still alive;
-- game-displayed length `666`;
-- trainer score `647`, trainer length `39`;
-- rank `70` of `319`;
-- `0` confirmed kills.
+- `180.8 s` of live control, released while still alive;
+- trainer length `36`;
+- game-displayed length/score `585`;
+- rank `51`;
+- `0` confirmed kills;
+- map coverage `1.9%` (`13` of `673` cells).
 
-A separate run ended at game final length `318`; the trainer stopped, stayed
-armed and left **Play Again** untouched. This beats the prior `213` result on the
-game-displayed length/score metric, but not rank `1`.
+The trainer survived a crowded arena, returned to farming and hunting after
+danger, and updated the radar, map and panel correctly. No live kill was
+confirmed; several hunts started and were abandoned or outrun.
+
+Earlier v0.4.0 safety runs ended at `66.6 s`, `94.6 s` and `60.1 s`. The latter
+two tested a feast-cooldown experiment; it was reverted because it did not
+produce meaningful live coverage and the best survival run did not use it. The
+`66.6 s` run validated the early peer bailout and body-caution direction but did
+not isolate a single cause of death.
+
+### v0.3.0 live validation (historical)
+
+The best v0.3.0 run survived `180 s`, was released alive, and reached
+game-displayed length/score `666`, trainer score `647`, trainer length `39`,
+rank `70` of `319`, with `0` confirmed kills. A separate run ended at game final
+length `318`; the trainer stopped, stayed armed and left **Play Again**
+untouched. This beat the prior `213` displayed-length result, but not rank `1`.
 
 Live outcomes remain variable. A `600 s` attempt died at `82 s` in a crowded
 spawn, and a later aggression experiment died at `53 s`; that experiment was
 reverted. A tail-bait live attempt survived `63 s` before a larger boosting
-snake closed in; it confirmed the new mode but did not record a kill. The
-stable configuration is the one described in this document.
+snake closed in; it confirmed the new mode but did not record a kill.
 
-The live harness used bundled Chromium because the installed Edge channel
-blocked the local script fetch. The offline suite ran in both installed Chrome
-and Edge, which is why the deterministic test results above cover both.
+The best v0.4.0 live run used headed Chrome. Edge automation was blocked by the
+site's local-script fetch (`net::ERR_BLOCKED_BY_CLIENT`), while the offline Edge
+suite runs normally.
 
 ### v0.2.1 live run (historical)
 
@@ -319,8 +343,10 @@ deterministic check for the ramming fix.
 
 | Screenshot | What it shows |
 | --- | --- |
+| [`assets/trainer_v040_headed_180s.png`](../assets/trainer_v040_headed_180s.png) | Best v0.4.0 run at `180 s`: trainer length `36`, displayed `585`, rank `51`, map and radar live. |
+| [`assets/trainer_v040_headed_release.png`](../assets/trainer_v040_headed_release.png) | The same v0.4.0 run after **Release**: game still playing, trainer idle, no restart. |
 | [`assets/trainer_v030_prearm3_start.png`](../assets/trainer_v030_prearm3_start.png) | v0.3.0 takeover on a fresh run at trainer length `2`, with nearby threats and the `2,400` radar. |
-| [`assets/trainer_v030_prearm3_end.png`](../assets/trainer_v030_prearm3_end.png) | The `180 s` v0.3.0 run at trainer length `39`, game length `666`, rank `70`, feast site and radar. |
+| [`assets/trainer_v030_prearm3_end.png`](../assets/trainer_v030_prearm3_end.png) | The `180 s` v0.3.0 run at trainer length `39`, displayed length `666`, rank `70`, feast site and radar. |
 | [`assets/trainer_v030_prearm3_death.png`](../assets/trainer_v030_prearm3_death.png) | Separate v0.3.0 run ended at game final length `318`; trainer armed, **Play Again** untouched. |
 | [`assets/trainer_edge_start.png`](../assets/trainer_edge_start.png) | Nickname `test`; trainer idle before the harness starts the run. |
 | [`assets/trainer_edge_takeover.png`](../assets/trainer_edge_takeover.png) | Takeover active with the v0.2.1 panel and radar. |

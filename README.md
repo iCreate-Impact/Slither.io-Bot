@@ -1,195 +1,255 @@
-# Slither.io Bot
+# Slither.io Trainer Panel
 
-A headless Playwright bot for [slither.io](https://slither.io) with a self-contained JavaScript planner injected into the live browser page.
+A browser-injectable trainer for [slither.io](https://slither.io). You start the
+game normally, inject `panel/trainer/trainer.js`, and the panel can take over the
+snake you already spawned. It reads the client's own live state and writes only
+the game's normal local steering and boost fields.
 
-The bot reads the game's own state (`window.slither`, `window.slithers`, `window.foods`, etc.) and writes steering through `window.xm` / `window.ym`. It does not reconstruct the game from pixels or network traffic.
+The production trainer is **takeover-only**. It never launches a browser,
+navigates, clicks **Play**, reconnects, or creates a run. The Playwright harness
+in `panel/trainer/tests/` is test-only.
 
-![Slither.io Bot playing](assets/slither_playing.png)
+![Trainer at 180 seconds](assets/trainer_v040_headed_180s.png)
 
-> **Project status: experimental.**
-> The current focus is **survival**: how long the bot can stay alive in a crowded arena. The longest zero-death run so far is **15 minutes** (length 108, score 2,244). See [Results](#results).
->
-> Maintained by **ichidera**. Contributions are welcome, see [Contributing](#contributing).
+> **Project status: experimental.** v0.4.0 has a radar, threat-aware steering,
+> food-density farming, corpse feasts, peer hunting, tail bait and a map
+> frontier. The current best headed live result is a **180 s** run that was
+> released while alive at trainer length `36`, displayed length/score `585`,
+> rank `51`, with `0` confirmed kills. Rank `1` and reliable live kills remain
+> open problems; see [Results](#results) and
+> [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
-> **Responsible use:** this is a research project about planning and collision avoidance. It is not affiliated with Slither.io or Lowtech Studios, and using bots may break the game's terms of service. Run it sparingly, one instance at a time, and don't use it to disrupt other players or to hammer the game's servers. Use it at your own risk.
+> **Responsible use:** this is a research project about planning and collision
+> avoidance. It is not affiliated with Slither.io or Lowtech Studios. Using bots
+> may break the game's terms of service. Run it sparingly, one instance at a
+> time, and do not use it to disrupt other players or hammer the game's servers.
+> Use it at your own risk.
+
+---
+
+## Features
+
+- **Live-state planner:** 24 coarse, 14 fine and 8 ultra-fine headings scored by a
+  short rollout with turn-rate limits and a control-lag model.
+- **Threat radar:** heads, predicted head motion, enemy body points and walls
+  inside `2,400` units. Time-to-collision, closest approach, crowd pressure and
+  faster-chaser checks decide whether a head is actually dangerous.
+- **Body-aware safety:** enemy bodies are collected even when their heads are
+  outside the threat radius. The locked target's body gets priority in the body
+  budget.
+- **Hunting and peer traps:** chase, cut, coil, tail bait and gated boost bursts.
+  Prey up to the trainer's own length is eligible when it is slower or crossing.
+  A fast peer that closes head-on is dropped early instead of traded.
+- **Feeding and feasts:** food lanes, local pellet-density weighting, large
+  pellets and timed corpse sites. Food pull is cut to `8%` while a hunt is live.
+- **Map exploration:** a coarse visited grid, coverage percentage and nearest
+  unvisited frontier. The **Explore** slider controls the vote; safety always has
+  the final say.
+- **Takeover boundary:** input shielding while active, instant **Release**,
+  hotkeys, and a death that stops control without clicking **Play Again**.
+
+---
+
+## Quick start
+
+### DevTools (no install)
+
+1. Open <https://slither.io> and start a run yourself.
+2. Press `F12` and open the **Console**.
+3. Open `panel/trainer/trainer.js`, copy the whole file, paste it into the
+   console, and press `Enter`.
+4. The **SLITHER TRAINER** panel appears in the top-right corner.
+5. Click **Take over**. Click **Release** or press `Alt+Shift+X` to return
+   control immediately.
+
+The panel exists only in the current page. Reloading removes it.
+
+### Userscript
+
+Install Tampermonkey or a compatible manager, create a userscript, and paste
+`panel/trainer/trainer.user.js`. It loads `trainer.js` from the published
+jsDelivr URL. Change the `@require` URL for a fork or a different branch.
+
+### Bookmarklet
+
+`panel/trainer/bookmarklet.txt` contains a one-line loader for the published
+copy. The userscript and bookmarklet only work after `panel/trainer/` is
+published at the referenced URL. If the site blocks the external script, use the
+DevTools method.
+
+---
+
+## Controls
+
+| Control | What it does |
+| --- | --- |
+| **Take over** | Starts steering the live snake. If no snake is live, it waits for the next run you start. |
+| **Release** | Stops steering and restores the game's own input handlers. |
+| **Re-arm after death** | Keeps the trainer armed after a death. It still never creates the next run. |
+| **Hunt snakes** | Enables target selection and hunting. |
+| **Safety** | Extra clearance in world units around every obstacle. |
+| **Food pull** | Pellet attraction strength. `0` disables farming. |
+| **Explore** | Map-frontier vote when no hunt or feast is active. |
+| **Aggro** | Hunt range and commitment. `0` disables hunting. |
+| **Radar range** | Rendered radar radius, `800` to `2,400` units. |
+| **Allow gated boost** | Permits short boosts for a clear escape or a gated cut-off. It never boosts just to chase food. |
+
+Hotkeys: `Alt+B` show/hide the panel, `Alt+T` take over/release,
+`Alt+Shift+X` emergency release.
 
 ---
 
 ## How it works
 
-- **Live-state planner:** a `requestAnimationFrame` loop at roughly the client's 30 Hz cadence.
-- **2.2 s rollout:** 48 coarse and 64 fine heading candidates, turn-rate limits, and a 240 ms control/server lag model.
-- **Threat capsules:** enemy body points and birth-stamped moving head trails in a spatial grid, with velocity-dependent safety halos.
-- **Self-body modeling:** above length 140 the bot's own visible trail is inserted into the grid. Candidate paths that loop back within two body radii of an older point are rejected.
-- **Per-target reaction lag:** enemy headings are held for roughly 0.05 s for fast tiny boosters and 0.09 to 0.11 s for ordinary and long snakes before easing toward the requested heading.
-- **Open-space bias:** every 400 ms the planner scores eight surrounding sectors by enemy and wall clearance and nudges ordinary farming toward the best one.
-- **Boosted-snake evasion:** run when a booster approaches from behind, cut perpendicular when head-on, ignore when moving away.
-- **Near-wall escape:** turns inward instead of hugging the rim.
-- **Optional behaviours:** an offensive coil, a gated boost cut-off and a corpse sweep exist as feature flags (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)). BIGRUN is off by default because A/B tests showed more boosted deaths without reliable growth.
+The client derives its requested heading from viewport-centre offsets:
 
-The production planner is embedded in `slither_bot.py` as `BOT_JS`. `bot_v2.js` is the editable source, and `run_v2.py` reloads it after each death for fast iteration.
-
----
-
-## Requirements
-
-- Python 3.11+
-- Node.js is **not** required at runtime. It is only used for `node --check` during development.
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-playwright install chromium
+```js
+eang = Math.atan2(ym, xm)
 ```
 
-If Chromium is already installed elsewhere, set `PLAYWRIGHT_BROWSERS_PATH` or pass `--browser /path/to/chrome`.
+While takeover is active, the trainer saves and replaces the game's mouse/touch
+handlers, writes `xm`/`ym` every animation frame, and sets the boost flag only
+when a gated burst is wanted. Release restores the saved handlers. Death stops
+control and leaves the game on its own screen; **Play Again** is never clicked
+by the trainer.
 
----
+The maintained source is split under `panel/trainer/src/` and concatenated into
+the single checked-in `panel/trainer/trainer.js` bundle:
 
-## Usage
-
-```bash
-python slither_bot.py --headless                    # run until Ctrl+C
-python slither_bot.py --headless --verbose          # planner logs
-python slither_bot.py --headless --seconds 1800     # stop after 30 minutes
-python slither_bot.py --headless --games 5          # stop after 5 deaths
-python slither_bot.py --headless --nick Survivor    # in-game nickname
-```
-
-| Flag | Description |
+| Module | Role |
 | --- | --- |
-| `--url URL` | Game URL |
-| `--headless` | Run Chromium without a window |
-| `--games N` | Stop after N deaths (`0` = until Ctrl+C) |
-| `--seconds N` | Stop after N seconds (`0` = no limit) |
-| `--verbose` | Print planning decisions |
-| `--browser PATH` | Use a specific Chromium/Chrome executable |
-| `--nick NAME` | In-game nickname (default `Survivor`) |
-| `--server IP:PORT` | Force a specific server |
-| `--start-max-threats N` | Abort and reconnect if more than N threats are near the spawn (default 8) |
-| `--abort-attempts N` | How many crowded spawns to reject before accepting one (default 3) |
-| `--no-start-filter` | Disable the crowded-spawn filter |
+| `00-foundation.js` | version, tunables, settings, math helpers, shared state |
+| `10-world.js` | game-state readers, threats, bodies, food, corpses, kill tracking |
+| `15-map.js` | visited grid, coverage, frontier heading |
+| `20-hunt.js` | target selection, peer rules, tail bait, danger, open-sector choice |
+| `25-feed.js` | food-density weighting |
+| `30-planner.js` | rollout scoring, hunt maneuvers, boost gates |
+| `40-control.js` | steering writes, release, snapshots, control tick |
+| `50-panel.js` | shadow-DOM panel, controls, radar, map readout |
+| `60-input.js` | input shielding, takeover/release, auto-arm, hotkeys |
+| `70-main.js` | animation loop, session lifecycle, public API, boot |
 
-The driver restarts automatically after a real death. Aborted starts are not counted as deaths.
+The planner still has the final safety vote: food, map and hunt terms can only
+choose among rollout paths that keep clearance and wall margins. See
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and
+[docs/TRAINER_MODULES.md](docs/TRAINER_MODULES.md).
 
-### Development runner
+---
 
-```bash
-python run_v2.py --headless --seconds 900 --verbose
-```
+## Tests
 
-The runner loads `bot_v2.js` from disk, so edits take effect on the next death or restart without rebuilding the embedded string. When a change is ready for the production driver:
-
-```bash
-python tools/sync_embedded.py
-python tools/sync_embedded.py --check
-```
-
-### Browser trainer panel (live session)
-
-`panel/trainer/` injects a control panel into a slither.io tab you already have
-open. It takes over the snake in that live session instead of launching a new
-browser or creating a new run. Start the run yourself, inject the panel, then
-click **Take over**. v0.2.1 fixes body ramming: enemy bodies are collected even
-when their heads are outside the 2,400-unit threat range, and the hunt target's
-body is prioritized in a crowd. v0.2.0 added the 2,400-unit threat radar,
-time-to-collision and faster-chaser evasion, smaller-snake hunting with
-chase/cut/coil maneuvers, corpse feasts, and tunable safety, aggression and radar
-controls. See [panel/trainer/README.md](panel/trainer/README.md) and
-[docs/TRAINER_TESTING.md](docs/TRAINER_TESTING.md).
-
-### Server probing
-
-The client's quiet-server pick uses `ac` (active connections), which can be high even when the actual arena is sparse. `probe_tops.py` samples candidate servers and reports how many snakes are within 1k / 2k / 4k units.
+The harness uses the installed default browser and never contacts slither.io.
+The trainer itself does not launch a browser.
 
 ```bash
-python probe_tops.py
-python slither_bot.py --headless --seconds 3600 \
-  --server 213.159.5.171:444 --start-max-threats 6 --abort-attempts 5 --verbose
+python -m pip install -r panel/trainer/tests/requirements.txt
+node --check panel/trainer/trainer.js
+python panel/trainer/tests/run_all.py
 ```
 
-### Recon probes
-
-Read-only scripts that dump live game state, for developing and debugging the planner:
+Force the full suite through Edge:
 
 ```bash
-python recon/recon_slither.py
-python recon/recon_food.py --out food_probe.json
-python recon/recon_mechanics.py --out slither_mechanics.json
+TRAINER_BROWSER=msedge python panel/trainer/tests/run_all.py
 ```
+
+On PowerShell:
+
+```powershell
+$env:TRAINER_BROWSER='msedge'; python panel/trainer/tests/run_all.py
+```
+
+Current deterministic coverage:
+
+```text
+test_modes.py       31/31 closed-loop modes
+test_takeover.py    31/31 takeover/input checks
+test_hunt_radar.py  42/42 hunt/radar/map/UI checks
+bench.py            60 fps with five enemies x 120 points
+```
+
+The closed-loop modes include body visibility, head-on evasion, peer/equal
+hunts, equal-size tail bait, evasive pressure, feast and map exploration. See
+[docs/TRAINER_TESTING.md](docs/TRAINER_TESTING.md) for geometry and the live
+checklist.
+
+### Build
+
+After editing a source module:
+
+```bash
+python panel/trainer/build.py
+python panel/trainer/build.py --check
+node --check panel/trainer/trainer.js
+```
+
+The userscript, bookmarklet and tests all consume the generated bundle.
 
 ---
 
 ## Results
 
-All are live headless runs. Scores are the displayed per-run score, not cumulative across restarts. Server population is the dominant uncontrolled variable.
+All scores are per-run and server-dependent. "Trainer length" is `slither.sct`;
+the game-displayed length/score is the computed score often shown as
+`Your length`.
 
-| State | Meaning |
-| --- | --- |
-| `NO-DEATH` | The run reached its time limit without a real death. |
-| `DIED` | A body/head collision caused a real death. Auto-restart may have continued the session. |
-| `CANCELLED` | The process was ended by the host environment, not by the game. Not a death. |
-| `FILTERED` | A crowded spawn was rejected by the start filter. Not a death. |
+| Run | Browser | Duration | State | Trainer len | Displayed len/score | Rank | Kills |
+| --- | --- | ---: | --- | ---: | ---: | ---: | ---: |
+| v0.4.0 headed | Chrome | 180.8 s | released alive | 36 | 585 | 51 | 0 |
+| v0.4.0 headed | Chrome | 66.6 s | died | — | — | — | 0 |
+| v0.3.0 headed | Chrome | 180 s | released alive | 39 | 647 | 70 of 319 | 0 |
 
-| Run | Duration | State | Deaths | Best len | Best score | Kills |
-| --- | --- | --- | ---: | ---: | ---: | ---: |
-| test 29, pre-hunt baseline | 15m00s | `NO-DEATH` | **0** | 108 | **2,244** | 4 |
-| test 56, hunt on | 11m08s | `DIED` | 1 | 102 | 2,053 | 2 |
-| test 32, pre-hunt baseline | 20m00s | `DIED` | 2 | 78 | 1,449 | 5 |
-| test 53, hunt on | 15m00s | `DIED` | 3 | 67 | 1,202 | 1 |
-| test 63, new build | 7m22s | `DIED` | 1 | 62 | 1,093 | 3 |
-| test 64, new build | 17m00s, 3 starts | `DIED` | 2 | 59 | 1,038 | 2 |
-| final embedded validation | 15m00s | `DIED` | 2 | 53 | 907 | 2 |
-| test 58, smoke test | 4m00s | `NO-DEATH` | 0 | 39 | 647 | 1 |
-| test 65 | 9m00s, 4 starts | `DIED` | 3 | 36 | 589 | 0 |
-| test 57, hunt off | 3m46s | `DIED` | 1 | 28 | 441 | 1 |
-| test 66 | 2m48s | `CANCELLED` | 0 | 28 | 433 | 1 |
-
-The full log, with servers and death contexts, is in [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
-
-### What the results show
-
-- The hunt-enabled run reached length 102 in 11 minutes, against length 28 in under 4 minutes with all hunt flags off, so those systems do produce growth.
-- The pre-hunt build still holds the longest zero-death run (test 29).
-- Growth is not the limit. Survival is: the observed growth rate is about 150 to 185 score per minute while alive, but runs end in boosted-snake attacks and multi-snake box-ins long before they get far.
-- The production self-grid gate (length 140) has not been reached in a live run. It was validated with a lowered threshold and with path-geometry tests.
+The 180 s v0.4.0 run tested the map-persistence, body-caution and fast-peer
+bailout changes. The trainer survived a crowded arena, returned to farming and
+hunting after danger, and was released while alive. It did not record a live
+kill. Equal-speed kiters, boosted peers and multi-snake box-ins remain the hard
+cases; see [docs/PERFORMANCE.md](docs/PERFORMANCE.md) for the full log and
+screenshots.
 
 ---
 
 ## Project layout
 
 ```text
-slither_bot.py          Python driver: Playwright lifecycle, death detection, CLI
-bot_v2.js               Injected JS planner (editable source)
-run_v2.py               Dev runner: loads bot_v2.js from disk
-probe_tops.py           Server sampler (nearby-snake density)
-tools/sync_embedded.py  Syncs bot_v2.js into the embedded BOT_JS
-recon/                  Read-only live-state, food and physics probes
-panel/trainer/          Browser-injectable panel for taking over a live tab
-panel/trainer/tests/    Offline Playwright regression and FPS tests
+panel/
+  trainer/
+    trainer.js          generated bundle loaded by userscript/tests
+    trainer.user.js     Tampermonkey loader
+    bookmarklet.txt     one-line loader for a published copy
+    build.py            ordered source concatenation and --check
+    src/                maintained modules
+    tests/              offline Playwright suites and FPS benchmark
+  cheats/
+    state_probe.js      read-only client-state probe
 docs/
-  ARCHITECTURE.md       Planner internals and game-state surface
-  PERFORMANCE.md        Measured runs, death profile, open problems
-  TRAINER_TESTING.md    Trainer body fix, Playwright tests and live checklist
-assets/                 Reference screenshots
+  ARCHITECTURE.md       runtime, planner and takeover model
+  TRAINER_MODULES.md    module map and data flow
+  TRAINER_TESTING.md    test harness, scenarios and live checklist
+  PERFORMANCE.md        live runs, death profile and open problems
+  CLIENT_PROBE.md       probe boundaries and usage
+assets/                 curated screenshots
 ```
 
-The Python driver only manages browser lifecycle, logging, restarts and the crowded-spawn filter. The injected planner owns steering.
+There is no production Python driver in this repository. The browser panel is
+the product; Python and Playwright are used only for testing and diagnostics.
 
 ---
 
+## Limitations
+
+- The client is server-authoritative. The trainer only requests local steering
+  and boost; it does not edit length, speed, collision results, packets or
+  another snake's state.
+- The map sees only state the client has already received.
+- A perfect equal-speed kiter can avoid a body trap in open space.
+- A fast or larger snake can still end a run, especially in a multi-snake box.
+- Offline tests prove geometry, input and UI invariants, not a leaderboard rank.
+
 ## Contributing
 
-The biggest open problem is **survival**. Useful contributions, in rough order of value:
-
-1. **Survival and escape planning:** early crowd-box detection, better multi-threat escape routes, safe wall handling.
-2. **Boosted-snake prediction:** tiny (length 2 to 20) and large (length 60 to 330) boosters attacking from the side or rear.
-3. **Server selection:** choose arenas by measured nearby-snake count instead of `ac`.
-4. **Log tooling:** a portable parser for run logs and result states, with fixtures.
-5. **Tests and docs:** replay geometry tests and reproduction commands.
-
-Read [CONTRIBUTING.md](CONTRIBUTING.md) first, since it covers the test protocol and the invariants that keep the embedded planner in sync. This project follows [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md). The useful work is survival and
+multi-threat escape, faster-peer prediction, map/farming balance, reproducible
+live logs, and focused geometry tests.
 
 ## Changelog
 
