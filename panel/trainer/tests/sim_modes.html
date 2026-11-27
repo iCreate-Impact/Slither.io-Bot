@@ -130,7 +130,10 @@
     // would hunt at all, which leaves a lot of free growth on the table.
     selfMax = 12;
     self.sct = 12;
-    var earlyPrey = makeEnemy(2, 16384 + 330, 16384 + 20, Math.PI / 2, 4.6, 8);
+    // A smaller, slower snake approaching the early player head-on. Keeping
+    // this target deterministic makes it a stable kill check; the crossing
+    // geometry is covered by the later `hunt` and `hunt_far` scenarios.
+    var earlyPrey = makeEnemy(2, 16384 + 330, 16384, Math.PI, 4.6, 8);
     earlyPrey.noHome = true;
     enemies = [earlyPrey];
   } else if (mode === "hunt_peer") {
