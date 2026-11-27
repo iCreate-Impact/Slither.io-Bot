@@ -29,7 +29,7 @@
     return;
   }
 
-  var VERSION = '0.3.0';
+  var VERSION = '0.4.0';
   var STORAGE_KEY = 'slitherTrainer.settings.v1';
   var TAU = Math.PI * 2;
 
@@ -64,15 +64,17 @@
     BODY_HALF: 14.5,       // rendered half-width at sc = 1
     WALL_MARGIN: 360,
     WALL_HARD: 80,
-    FOOD_RANGE: 1100,
-    FOOD_REACH: 320,
-    FOOD_POINTS: 64,
-    FOOD_RADAR_POINTS: 110,
-    FOOD_WEIGHT: 20,
-    FOOD_LANE_WEIGHT: 9,
-    CORPSE_RADIUS: 320,
+    FOOD_RANGE: 1900,
+    FOOD_REACH: 360,
+    FOOD_POINTS: 96,
+    FOOD_RADAR_POINTS: 128,
+    FOOD_WEIGHT: 24,
+    FOOD_LANE_WEIGHT: 12,
+    FOOD_CLUSTER_RADIUS: 155,
+    FOOD_CLUSTER_BONUS: 0.16,
+    CORPSE_RADIUS: 360,
     CORPSE_MS: 12000,
-    CORPSE_WEIGHT: 10,
+    CORPSE_WEIGHT: 12,
     DANGER_CLEAR: 18,
     BOOST_CLEAR: 12,
     BOOST_MS: 800,
@@ -88,7 +90,12 @@
     PREV_BONUS: 10,
     RADAR_RANGE: 2400,
     HUNT_MIN_LEN: 6,
-    HUNT_MAX_RATIO: 0.90,
+    // Peer-sized prey is allowed when it is crossing or slow. A target that
+    // is longer than the player is still rejected below, and head-on peers
+    // still go through the close-range bailout.
+    HUNT_MAX_RATIO: 1.0,
+    HUNT_BOOST_RATIO: 1.0,
+    TAIL_BAIT_RATIO: 1.0,
     HUNT_MIN_DIST: 75,
     HUNT_MAX_DIST: 900,
     HUNT_CROWD_RADIUS: 520,
@@ -98,18 +105,31 @@
     HUNT_BONUS: 110,
     CHASE_BONUS: 260,
     HUNT_BODY_BONUS: 85,
-    HUNT_FOOD_SCALE: 0.25,
+    // Feeding is now much stronger in neutral play, so cut it harder while a
+    // kill is live. The old 0.25 was tuned against weaker food attraction and
+    // let a dense pellet ring pull the chase off a peer target.
+    HUNT_FOOD_SCALE: 0.08,
     HUNT_CLEAR_CAP: 26,
     OPEN_BIAS: 55,
     OPEN_RANGE: 1900,
     OPEN_COMMIT_MS: 3200,
+    // Strategic map/foraging layer. The planner still has the final say on
+    // safety; this only gives it a gentle reason to sweep unexplored ground
+    // instead of circling a farmed-out patch.
+    MAP_BIAS: 34,
+    MAP_CELL: 620,
+    MAP_SAMPLE_MS: 180,
+    MAP_FRONTIER_MS: 700,
+    MAP_TARGET_DIST: 300,
+    MAP_WALL_PAD: 500,
     SAFE_BONUS: 2000,
     UNSAFE_PENALTY: 2000
   };
 
   var DEFAULT_SETTINGS = {
     safety: 18,
-    foodPull: 1,
+    foodPull: 1.15,
+    explore: 0.6,
     hunt: true,
     aggression: 1.2,
     radarRange: 2400,
@@ -162,6 +182,7 @@
     }
     s.safety = clamp(num(s.safety, DEFAULT_SETTINGS.safety), 4, 40);
     s.foodPull = clamp(num(s.foodPull, DEFAULT_SETTINGS.foodPull), 0, 2);
+    s.explore = clamp(num(s.explore, DEFAULT_SETTINGS.explore), 0, 1);
     s.hunt = (s.hunt === undefined) ? DEFAULT_SETTINGS.hunt : !!s.hunt;
     s.aggression = clamp(num(s.aggression, DEFAULT_SETTINGS.aggression), 0, 2);
     s.radarRange = clamp(num(s.radarRange, DEFAULT_SETTINGS.radarRange), 800, TUNE.THREAT_RANGE);
@@ -177,6 +198,7 @@
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
         safety: state.settings.safety,
         foodPull: state.settings.foodPull,
+        explore: state.settings.explore,
         hunt: state.settings.hunt,
         aggression: state.settings.aggression,
         radarRange: state.settings.radarRange,
@@ -227,6 +249,12 @@
     kills: 0,
     corpse: null,
     deadIds: {},
+    coverage: 0,
+    mapVisited: 0,
+    mapCells: 0,
+    mapHeading: null,
+    mapTarget: null,
+    mapSamples: 0,
     snapshot: null
   };
 
@@ -493,8 +521,10 @@
       if (isCorpse) w *= TUNE.CORPSE_WEIGHT;
       out.push({ x: fx, y: fy, sz: sz, w: w, d2: d2, corpse: isCorpse });
     }
-    // Rank by distance discounted by value, so a nearby feast does not get
-    // buried under a cloud of one-point pellets.
+    // A lone pellet is a snack; a tight stream of pellets is a feeding lane.
+    // Do the density pass before ranking so clusters rise above isolated
+    // bait, then rank by distance discounted by the adjusted value.
+    enrichFoodDensity(out);
     out.sort(function (a, b) {
       return (a.d2 / (1 + a.w * 0.35)) - (b.d2 / (1 + b.w * 0.35));
     });
@@ -531,6 +561,210 @@
     }
   }
 
+  // ---- strategic map probe ---------------------------------------------
+  // The client already exposes the arena and the snakes/food it has received.
+  // This layer keeps a coarse visited grid and chooses an unvisited frontier.
+  // It is deliberately local: no extra requests, no server reads, and the
+  // safety planner can always overrule the frontier heading.
+  var MAP = {
+    grid: null,
+    inside: null,
+    cols: 0,
+    rows: 0,
+    cell: TUNE.MAP_CELL,
+    originX: 0,
+    originY: 0,
+    arenaKey: '',
+    meId: null,
+    lastSampleAt: 0,
+    lastX: null,
+    lastY: null,
+    visited: 0,
+    insideCount: 0,
+    coverage: 0,
+    samples: 0,
+    target: null,
+    targetAt: 0,
+    heading: null
+  };
+
+  function mapArenaKey(arena) {
+    return Math.round(arena.cx) + ':' + Math.round(arena.cy) + ':' +
+      Math.round(arena.r);
+  }
+
+  function mapReset(me, arena, now) {
+    var cell = Math.max(420, TUNE.MAP_CELL);
+    var span = Math.ceil((arena.r * 2) / cell) + 2;
+    var total = span * span;
+    MAP.grid = new Uint8Array(total);
+    MAP.inside = new Uint8Array(total);
+    MAP.cols = span;
+    MAP.rows = span;
+    MAP.cell = cell;
+    MAP.originX = arena.cx - (span * cell) / 2;
+    MAP.originY = arena.cy - (span * cell) / 2;
+    MAP.arenaKey = mapArenaKey(arena);
+    MAP.meId = me && me.id !== undefined ? String(me.id) : null;
+    MAP.lastSampleAt = 0;
+    MAP.lastX = me ? num(me.xx, arena.cx) : arena.cx;
+    MAP.lastY = me ? num(me.yy, arena.cy) : arena.cy;
+    MAP.visited = 0;
+    MAP.insideCount = 0;
+    MAP.coverage = 0;
+    MAP.samples = 0;
+    MAP.target = null;
+    MAP.targetAt = 0;
+    MAP.heading = null;
+
+    var radius = Math.max(200, arena.r - TUNE.MAP_WALL_PAD);
+    var radius2 = radius * radius;
+    for (var row = 0; row < span; row++) {
+      for (var col = 0; col < span; col++) {
+        var x = MAP.originX + (col + 0.5) * cell;
+        var y = MAP.originY + (row + 0.5) * cell;
+        if (dist2(x, y, arena.cx, arena.cy) <= radius2) {
+          MAP.inside[row * span + col] = 1;
+          MAP.insideCount++;
+        }
+      }
+    }
+    state.coverage = 0;
+    state.mapVisited = 0;
+    state.mapCells = MAP.insideCount;
+    state.mapHeading = null;
+    state.mapTarget = null;
+    state.mapSamples = 0;
+    if (me) mapVisit(me.xx, me.yy);
+    if (now !== undefined) MAP.lastSampleAt = now;
+  }
+
+  function mapVisit(x, y) {
+    if (!MAP.grid || !MAP.inside) return;
+    var col = Math.floor((x - MAP.originX) / MAP.cell);
+    var row = Math.floor((y - MAP.originY) / MAP.cell);
+    if (col < 0 || row < 0 || col >= MAP.cols || row >= MAP.rows) return;
+    var key = row * MAP.cols + col;
+    if (!MAP.inside[key]) return;
+    if (MAP.grid[key] === 0) MAP.visited++;
+    if (MAP.grid[key] < 255) MAP.grid[key]++;
+  }
+
+  function mapMarkSegment(x0, y0, x1, y1) {
+    var dx = x1 - x0;
+    var dy = y1 - y0;
+    var distance = Math.sqrt(dx * dx + dy * dy);
+    // A sample every ~45% of a cell keeps the trail continuous without
+    // spending thousands of operations when a boost moves us far.
+    var steps = Math.max(1, Math.ceil(distance / (MAP.cell * 0.45)));
+    for (var i = 0; i <= steps; i++) {
+      var t = i / steps;
+      mapVisit(x0 + dx * t, y0 + dy * t);
+    }
+  }
+
+  function mapSample(me, arena, now) {
+    var key = mapArenaKey(arena);
+    var id = me && me.id !== undefined ? String(me.id) : null;
+    if (!MAP.grid || MAP.arenaKey !== key || MAP.meId !== id) {
+      mapReset(me, arena, now);
+    }
+    if (!me) return MAP;
+    if (now - MAP.lastSampleAt < TUNE.MAP_SAMPLE_MS) return MAP;
+    var x = num(me.xx, arena.cx);
+    var y = num(me.yy, arena.cy);
+    mapMarkSegment(MAP.lastX, MAP.lastY, x, y);
+    MAP.lastX = x;
+    MAP.lastY = y;
+    MAP.lastSampleAt = now;
+    MAP.samples++;
+    MAP.coverage = MAP.insideCount > 0 ?
+      MAP.visited / Math.max(1, MAP.insideCount) : 0;
+    state.coverage = MAP.coverage;
+    state.mapVisited = MAP.visited;
+    state.mapCells = MAP.insideCount;
+    state.mapSamples = MAP.samples;
+    return MAP;
+  }
+
+  function mapCellCenter(col, row) {
+    return {
+      x: MAP.originX + (col + 0.5) * MAP.cell,
+      y: MAP.originY + (row + 0.5) * MAP.cell
+    };
+  }
+
+  function mapChooseFrontier(me, arena, now) {
+    if (!MAP.grid) return null;
+    var target = MAP.target;
+    if (target) {
+      var td = Math.sqrt(dist2(me.xx, me.yy, target.x, target.y));
+      if (td > TUNE.MAP_TARGET_DIST && now - MAP.targetAt < 1800) {
+        return {
+          x: target.x, y: target.y, heading: MAP.heading,
+          distance: td, unvisited: target.unvisited
+        };
+      }
+    }
+    if (now - MAP.targetAt < TUNE.MAP_FRONTIER_MS && target) {
+      return {
+        x: target.x, y: target.y, heading: MAP.heading,
+        distance: Math.sqrt(dist2(me.xx, me.yy, target.x, target.y)),
+        unvisited: target.unvisited
+      };
+    }
+
+    var best = null;
+    var bestScore = -Infinity;
+    var unvisitedLeft = 0;
+    for (var row = 0; row < MAP.rows; row++) {
+      for (var col = 0; col < MAP.cols; col++) {
+        var key = row * MAP.cols + col;
+        if (!MAP.inside[key]) continue;
+        var visits = MAP.grid[key];
+        if (visits === 0) unvisitedLeft++;
+        var point = mapCellCenter(col, row);
+        var d = Math.sqrt(dist2(me.xx, me.yy, point.x, point.y));
+        if (d < 220) continue;
+        // Nearest unvisited cell first: this produces a sweep instead of a
+        // random walk. Once the map is covered, prefer the least-visited
+        // cell far enough away to be a useful new sweep.
+        var score;
+        if (visits === 0) score = 1000000 - d;
+        else score = -visits * 8000 - d;
+        if (MAP.heading !== null) {
+          var toCell = Math.atan2(point.y - me.yy, point.x - me.xx);
+          score += Math.cos(angleDiff(toCell, MAP.heading)) * 120;
+        }
+        if (score > bestScore) {
+          bestScore = score;
+          best = point;
+          best.unvisited = visits === 0;
+        }
+      }
+    }
+    if (!best) {
+      MAP.target = null;
+      MAP.heading = null;
+      state.mapHeading = null;
+      state.mapTarget = null;
+      return null;
+    }
+    MAP.target = best;
+    MAP.targetAt = now;
+    MAP.heading = Math.atan2(best.y - me.yy, best.x - me.xx);
+    MAP.target.unvisited = best.unvisited;
+    state.mapHeading = MAP.heading;
+    state.mapTarget = { x: best.x, y: best.y, unvisited: !!best.unvisited };
+    return {
+      x: best.x,
+      y: best.y,
+      heading: MAP.heading,
+      distance: Math.sqrt(dist2(me.xx, me.yy, best.x, best.y)),
+      unvisited: !!best.unvisited,
+      left: unvisitedLeft
+    };
+  }
   // ---- planner ---------------------------------------------------------
   function angleBlend(a, b, t) {
     t = clamp(t, 0, 1);
@@ -540,7 +774,10 @@
   }
 
   function isTailBait(me, s, selfLen) {
-    if (!s || s.sct > selfLen * 0.9) return false;
+    // Equal-sized chasers are valid bait too. The kill comes from the head
+    // behind us hitting our body, so the chaser's size is less important
+    // than the fact that it is faster and already committed to our line.
+    if (!s || s.sct > selfLen * TUNE.TAIL_BAIT_RATIO) return false;
     var toT = Math.atan2(s.y - me.yy, s.x - me.xx);
     var behind = Math.cos(angleDiff(toT, num(me.ang, 0))) < -0.35;
     var towardUs = Math.cos(angleDiff(s.ang, toT + Math.PI)) > 0.15;
@@ -719,7 +956,7 @@
       now < state.huntCooldownUntil;
     if (current && !currentCooling && now < state.huntUntil &&
         current.d < TUNE.HUNT_MAX_DIST * 1.3 &&
-        current.sct <= selfLen * 0.98) {
+        current.sct <= selfLen * TUNE.HUNT_MAX_RATIO) {
       var currentToT = Math.atan2(current.y - me.yy, current.x - me.xx);
       var currentAway = Math.cos(angleDiff(current.ang, currentToT));
       var currentTail = isTailBait(me, current, selfLen);
@@ -737,8 +974,10 @@
     }
 
     var aggression = clamp(num(state.settings.aggression, 1), 0, 2);
-    // Never deliberately hunt a snake that is longer than us. The extra
-    // aggression goes into range, lock time and body-trap commitment instead.
+    // Peer-sized prey is now fair game when it is slow or crossing. A snake
+    // longer than the player is still rejected, and a head-on peer still
+    // triggers the close-range bailout. The extra aggression goes into range,
+    // lock time and body-trap commitment rather than blind head-on ramming.
     var maxRatio = Math.min(1, TUNE.HUNT_MAX_RATIO + (aggression - 1) * 0.12);
     var maxDist = TUNE.HUNT_MAX_DIST * (0.85 + aggression * 0.15);
     var maxCrowd = TUNE.HUNT_MAX_CROWD + (aggression > 1.5 ? 1 : 0);
@@ -795,6 +1034,55 @@
     return null;
   }
 
+  // ---- feeding value ---------------------------------------------------
+  // Slither's food is not uniformly valuable. A line of small pellets at the
+  // edge of the current path is usually a better farm than one isolated large
+  // pellet behind the player, and a corpse cluster is better still. The world
+  // collector has already applied size/corpse weight; this pass adds a local
+  // density term without turning feeding into an O(n^2) scan.
+  function enrichFoodDensity(foods) {
+    if (!foods || foods.length < 2) return foods;
+    var cell = TUNE.FOOD_CLUSTER_RADIUS;
+    var cell2 = cell * cell;
+    var buckets = {};
+    var i;
+    for (i = 0; i < foods.length; i++) {
+      var f = foods[i];
+      var cx = Math.floor(f.x / cell);
+      var cy = Math.floor(f.y / cell);
+      var key = cx + ':' + cy;
+      if (!buckets[key]) buckets[key] = [];
+      buckets[key].push(f);
+    }
+    for (i = 0; i < foods.length; i++) {
+      var food = foods[i];
+      var bx = Math.floor(food.x / cell);
+      var by = Math.floor(food.y / cell);
+      var count = 0;
+      var mass = 0;
+      for (var ox = -1; ox <= 1; ox++) {
+        for (var oy = -1; oy <= 1; oy++) {
+          var bucket = buckets[(bx + ox) + ':' + (by + oy)];
+          if (!bucket) continue;
+          for (var j = 0; j < bucket.length; j++) {
+            var other = bucket[j];
+            if (other === food) continue;
+            if (dist2(food.x, food.y, other.x, other.y) > cell2) continue;
+            count++;
+            mass += other.sz;
+          }
+        }
+      }
+      food.density = count;
+      food.clusterMass = mass;
+      var densityBonus = Math.min(
+        2.5,
+        count * TUNE.FOOD_CLUSTER_BONUS + Math.min(1, mass / 140) * 0.30
+      );
+      food.w *= 1 + densityBonus;
+    }
+    return foods;
+  }
   function evaluatePath(me, targetHeading, ctx) {
     var steps = TUNE.STEPS;
     var dt = TUNE.HORIZON / steps;
@@ -1035,6 +1323,11 @@
       score += Math.cos(angleDiff(targetHeading, ctx.openHeading)) *
         TUNE.OPEN_BIAS * ctx.openWeight;
     }
+    if (ctx.mapHeading !== null && ctx.mapHeading !== undefined &&
+        !ctx.huntTarget && !ctx.escape && ctx.mapWeight > 0) {
+      score += Math.cos(angleDiff(targetHeading, ctx.mapHeading)) *
+        TUNE.MAP_BIAS * ctx.mapWeight;
+    }
     if (ctx.danger && ctx.danger.wall < TUNE.WALL_MARGIN + 220) {
       var toCenter = Math.atan2(arena.cy - me.yy, arena.cx - me.xx);
       score += Math.cos(angleDiff(targetHeading, toCenter)) * 14;
@@ -1083,6 +1376,11 @@
     state.nearest = danger.nearest;
     if (state.corpse && now >= state.corpse.until) state.corpse = null;
     detectCorpse(foods, now);
+    // Keep the coarse map warm every tick, even while hunting. The frontier
+    // heading only votes when the local area is calm and no target/feast is
+    // active; otherwise it is just instrumentation.
+    mapSample(me, arena, now);
+    var mapInfo = mapChooseFrontier(me, arena, now);
 
     var target = selectHuntTarget(me, threats, arena, now);
     var selfLen = Math.max(0, num(me.sct, 0));
@@ -1245,6 +1543,20 @@
       state.migrateUntil = 0;
     }
 
+    var mapWeight = 0;
+    if (mapInfo && !target && !state.corpse &&
+        state.settings.explore > 0 && !modeDanger.urgent &&
+        modeDanger.level <= 0.55) {
+      var nearFood = 0;
+      for (i = 0; i < foods.length; i++) {
+        if (foods[i].d2 < 650 * 650) nearFood++;
+      }
+      // A dense local farm is already the best use of time. The frontier
+      // becomes a real vote only when the nearby field is thin.
+      mapWeight = state.settings.explore *
+        clamp(0.9 - nearFood * 0.02, 0.25, 0.9);
+    }
+
     var ctx = {
       obstacles: threats.points.concat(bodyPoints, selfBody),
       heads: threats.heads,
@@ -1264,7 +1576,9 @@
       nearest: modeDanger.nearest || danger.nearest,
       evadeHeading: evadeHeading,
       openHeading: openHeading,
-      openWeight: openWeight
+      openWeight: openWeight,
+      mapHeading: mapInfo ? mapInfo.heading : null,
+      mapWeight: mapWeight
     };
 
     for (i = 0; i < TUNE.COARSE_N; i++) {
@@ -1320,6 +1634,7 @@
     else if (target) mode = target.maneuver;
     else if (state.corpse && state.settings.foodPull > 0) mode = 'feast';
     else if (best.foodScore > 0.5) mode = 'farm';
+    else if (mapWeight > 0) mode = 'explore';
 
     // The target's own body is part of minClear, so a normal close chase
     // routinely sits below DANGER_CLEAR. Dropping the hunt at the full
@@ -1399,7 +1714,7 @@
         (mode === 'cut' || mode === 'chase' || mode === 'coil' || mode === 'hunt') &&
         target.d > 110 && target.d < TUNE.HUNT_MAX_DIST * 1.15 &&
         target.speed < baseSpeed * 1.06 &&
-        target.sct <= num(me.sct, 0) * 0.92 &&
+        target.sct <= num(me.sct, 0) * TUNE.HUNT_BOOST_RATIO &&
         num(me.sct, 0) >= 8 &&
         // The target's own body is part of minClear. A fixed 26-unit gate
         // therefore disables the boost exactly when the prey is close enough
@@ -1503,6 +1818,10 @@
       corpse: state.corpse ? { x: state.corpse.x, y: state.corpse.y } : null,
       danger: state.danger,
       kills: state.kills,
+      coverage: state.coverage,
+      mapVisited: state.mapVisited,
+      mapCells: state.mapCells,
+      mapTarget: state.mapTarget ? { x: state.mapTarget.x, y: state.mapTarget.y } : null,
       range: state.settings.radarRange
     };
   }
@@ -1534,6 +1853,8 @@
     var foods = collectFoods(me, Math.max(TUNE.FOOD_RANGE, state.settings.radarRange),
       TUNE.FOOD_RADAR_POINTS);
     if (state.corpse && now >= state.corpse.until) state.corpse = null;
+    mapSample(me, arena, now);
+    mapChooseFrontier(me, arena, now);
     var danger = assessDanger(me, threats, arena);
     state.danger = danger.level;
     state.nearest = danger.nearest;
@@ -1595,11 +1916,14 @@
       '.pill[data-mode="coil"]{color:#fbcfe8;border-color:#7e2b5a;background:#280d1d;}',
       '.pill[data-mode="cut"]{color:#fed7aa;border-color:#9a3412;background:#2a130b;}',
       '.pill[data-mode="bait"]{color:#fbcfe8;border-color:#7e2b5a;background:#280d1d;}',
+      '.pill[data-mode="explore"]{color:#a5f3fc;border-color:#155e75;background:#08212b;}',
       '.pill[data-mode="cruise"]{color:#bae6fd;border-color:#1d4f6b;background:#0c1c26;}',
       '.targetline{margin:-3px 0 8px;min-height:12px;color:#71889d;font-size:9px;letter-spacing:.02em;',
       'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
       '.targetline[data-kind="hunt"]{color:#fda4af;}',
       '.targetline[data-kind="feast"]{color:#fde68a;}',
+      '.mapline{margin:-4px 0 8px;min-height:11px;color:#67e8f9;font-size:9px;',
+      'letter-spacing:.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
       '.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:9px;}',
       '.stat{background:#0b131c;border:1px solid #1c2c3b;border-radius:7px;padding:5px 6px;min-width:0;}',
       '.stat b{display:block;font-size:14px;color:#e8f3ff;font-weight:600;overflow:hidden;text-overflow:ellipsis;}',
@@ -1655,6 +1979,7 @@
       '      <div class="stat"><b id="clr">\u2013</b><span>clearance</span></div>',
       '    </div>',
       '    <div class="targetline" id="targetline">No hunt target</div>',
+      '    <div class="mapline" id="mapline">Map \u2013</div>',
       '    <div class="radarwrap">',
       '      <canvas class="radar" id="radar" width="220" height="220"></canvas>',
       '      <span class="radarlabel" id="radarlabel">2,400 unit radar</span>',
@@ -1664,9 +1989,10 @@
       '      <button type="button" class="btn ghost" id="releaseBtn" disabled>Release</button>',
       '    </div>',
       '    <label class="check"><input type="checkbox" id="autoArm"> Re-arm after death</label>',
-      '    <label class="check"><input type="checkbox" id="hunt"> Hunt smaller snakes</label>',
+      '    <label class="check"><input type="checkbox" id="hunt"> Hunt snakes</label>',
       '    <div class="slider"><span>Safety</span><input type="range" id="safety" min="4" max="40" step="1"><output id="safetyOut">18</output></div>',
-      '    <div class="slider"><span>Food pull</span><input type="range" id="foodPull" min="0" max="2" step="0.1"><output id="foodPullOut">1.0</output></div>',
+      '    <div class="slider"><span>Food pull</span><input type="range" id="foodPull" min="0" max="2" step="0.1"><output id="foodPullOut">1.2</output></div>',
+      '    <div class="slider"><span>Explore</span><input type="range" id="explore" min="0" max="1" step="0.1"><output id="exploreOut">0.6</output></div>',
       '    <div class="slider"><span>Aggro</span><input type="range" id="aggression" min="0" max="2" step="0.1"><output id="aggressionOut">1.0</output></div>',
       '    <div class="slider"><span>Radar</span><input type="range" id="radarRange" min="800" max="2400" step="100"><output id="radarRangeOut">2400</output></div>',
       '    <label class="check"><input type="checkbox" id="boostEscape"> Allow gated boost</label>',
@@ -1693,6 +2019,7 @@
     els.radar = shadow.getElementById('radar');
     els.radarlabel = shadow.getElementById('radarlabel');
     els.targetline = shadow.getElementById('targetline');
+    els.mapline = shadow.getElementById('mapline');
     els.body = shadow.getElementById('body');
     els.minBtn = shadow.getElementById('minBtn');
     els.hideBtn = shadow.getElementById('hideBtn');
@@ -1704,6 +2031,8 @@
     els.safetyOut = shadow.getElementById('safetyOut');
     els.foodPull = shadow.getElementById('foodPull');
     els.foodPullOut = shadow.getElementById('foodPullOut');
+    els.explore = shadow.getElementById('explore');
+    els.exploreOut = shadow.getElementById('exploreOut');
     els.boostEscape = shadow.getElementById('boostEscape');
     els.hunt = shadow.getElementById('hunt');
     els.aggression = shadow.getElementById('aggression');
@@ -1715,6 +2044,8 @@
     els.safetyOut.textContent = state.settings.safety;
     els.foodPull.value = state.settings.foodPull;
     els.foodPullOut.textContent = Number(state.settings.foodPull).toFixed(1);
+    els.explore.value = state.settings.explore;
+    els.exploreOut.textContent = Number(state.settings.explore).toFixed(1);
     els.hunt.checked = !!state.settings.hunt;
     els.aggression.value = state.settings.aggression;
     els.aggressionOut.textContent = Number(state.settings.aggression).toFixed(1);
@@ -1832,6 +2163,11 @@
       els.foodPullOut.textContent = Number(state.settings.foodPull).toFixed(1);
     });
     els.foodPull.addEventListener('change', saveSettings);
+    els.explore.addEventListener('input', function () {
+      state.settings.explore = clamp(num(els.explore.value, DEFAULT_SETTINGS.explore), 0, 1);
+      els.exploreOut.textContent = Number(state.settings.explore).toFixed(1);
+    });
+    els.explore.addEventListener('change', saveSettings);
     els.aggression.addEventListener('input', function () {
       state.settings.aggression = clamp(num(els.aggression.value, 1), 0, 2);
       els.aggressionOut.textContent = Number(state.settings.aggression).toFixed(1);
@@ -1905,6 +2241,18 @@
     els.targetline.textContent = tline;
     els.targetline.dataset.kind = tkind;
 
+    var mline = 'Map \u2013';
+    if (me && state.mapCells > 0) {
+      var pct = state.coverage * 100;
+      mline = 'Map ' + (pct >= 10 ? Math.round(pct) : pct.toFixed(1)) +
+        '% \u00b7 ' + state.mapVisited + '/' + state.mapCells + ' cells';
+      if (state.mapTarget) {
+        var md = Math.sqrt(dist2(me.xx, me.yy, state.mapTarget.x, state.mapTarget.y));
+        mline += ' \u00b7 frontier ' + fmt(md) + 'u';
+      }
+    }
+    els.mapline.textContent = mline;
+
     if (state.takeover) {
       els.takeBtn.disabled = true;
       els.takeBtn.textContent = 'Takeover active';
@@ -1928,6 +2276,10 @@
     if (active !== els.foodPull) {
       els.foodPull.value = state.settings.foodPull;
       els.foodPullOut.textContent = Number(state.settings.foodPull).toFixed(1);
+    }
+    if (active !== els.explore) {
+      els.explore.value = state.settings.explore;
+      els.exploreOut.textContent = Number(state.settings.explore).toFixed(1);
     }
     if (active !== els.aggression) {
       els.aggression.value = state.settings.aggression;
@@ -2400,6 +2752,9 @@
         state.boost = false;
         state.boostUntil = 0;
         state.boostCooldownUntil = 0;
+        state.coverage = 0;
+        state.mapHeading = null;
+        state.mapTarget = null;
         resetHuntState(true);
       }
     }
@@ -2440,6 +2795,10 @@
         assessDanger: assessDanger,
         selectHuntTarget: selectHuntTarget,
         detectCorpse: detectCorpse,
+        enrichFoodDensity: enrichFoodDensity,
+        mapSample: mapSample,
+        mapChooseFrontier: mapChooseFrontier,
+        mapReset: mapReset,
         arenaInfo: arenaInfo
       }
     };

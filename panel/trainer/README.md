@@ -16,9 +16,30 @@ you open slither.io  ->  you press Play  ->  you inject trainer.js
 ```
 
 This is separate from the headless `slither_bot.py` / `bot_v2.js` driver. The
-trainer is self-contained and does not require Python or a build step.
+distributed trainer is a self-contained bundle; users do not need Python or a
+build step. The source is modular for maintenance, and rebuilding the bundle is
+only needed after editing `panel/trainer/src/`.
 
-### What is new in v0.3.0
+### What is new in v0.4.0
+
+- **Peer hunting:** deliberate hunts now allow prey up to `100%` of the
+  trainer's length when it is slower or crossing. A snake longer than the
+  player is still rejected, and head-on peers still trigger the close bailout.
+- **Equal-size tail bait:** a same-size chaser behind the player can be killed
+  by the trailing body. The old `0.9` length gate was the only reason this
+  common live shape was ignored.
+- **Map exploration:** a coarse visited grid and a low-coverage frontier now
+  give the planner a calm-area sweep target. Coverage and frontier distance are
+  shown above the radar. The **Explore** slider controls the vote.
+- **Better feeding:** food lanes are wider, tight pellet streams are weighted by
+  local density instead of distance alone, and the default food pull is `1.15`.
+  Food attraction is cut to `8%` while a hunt is live so a farm cannot pull the
+  snake off a committed kill.
+- **Source modules:** the trainer source is split into planner, world, map,
+  feed, hunt, control, panel and input files. `trainer.js` remains the single
+  bundle consumed by the userscript, bookmarklet and tests.
+
+### What was new in v0.3.0
 
 - Hunting starts at length `6`, default aggression is `1.2`, and the radar,
   threat range and default radar view are all `2,400` units.
@@ -110,13 +131,15 @@ method instead.
 | **Take over** | Starts steering the live snake. If no snake is live, it arms and waits for the next run you start. |
 | **Release** | Stops steering and restores the game's own mouse/touch handlers. |
 | **Re-arm after death** | When checked, a death stops control but leaves the trainer armed. When you start the next run yourself, it takes over automatically. |
-| **Hunt smaller snakes** | Enables target selection. The trainer only hunts snakes that are clearly smaller, isolated, and in open space. |
+| **Hunt snakes** | Enables target selection. Peer-sized prey is eligible when it is slower or crossing; a longer snake is still rejected. |
 | **Safety** | Extra clearance in world units added to every obstacle. Higher is more cautious. |
-| **Food pull** | How strongly the planner is attracted to pellets. `0` disables farming; `2` is aggressive. Food pull is reduced while a hunt target is locked. |
-| **Aggro** | `0` disables hunting. Higher values allow larger prey, a longer target range, and a little more crowd tolerance. |
+| **Food pull** | How strongly the planner is attracted to pellets. `0` disables farming; `2` is aggressive. Food pull is reduced to `8%` while a hunt target is locked. |
+| **Explore** | `0` disables map-frontier steering; `1` sweeps unexplored ground aggressively when the local farm is thin and no hunt/feast is active. |
+| **Aggro** | `0` disables hunting. Higher values allow a longer target range and, above `1.5`, one extra nearby head. |
 | **Radar range** | Rendered radar radius from `800` to `2,400` world units. The planner itself always watches up to `2,400`. |
 | **Allow gated boost** | Allows short boost bursts for a close escape or a gated cut-off on a smaller target. It never boosts just to chase food. |
 | **Radar** | Local view: pink = enemy heads, orange = enemy body points, red/pink target = locked prey, green = food, amber = corpse/feast food, teal = your body and planned path. |
+| **Map line** | Coverage percentage, visited grid cells and distance to the current exploration frontier. |
 | **Header drag** | Move the panel. The position is saved for the next injection. |
 | **Minimize / hide** | Collapse the panel to its header, or hide it to the round **T** button (`Alt+B` restores it). |
 
@@ -189,9 +212,9 @@ different snake could otherwise consume every available body point.
 
 When hunting is enabled, a target must pass all of these gates:
 
-- It is smaller than you: `90%` of your length at default aggression, rising to
-  about `92%` at **Aggro** `1.2`. The trainer never deliberately hunts a snake
-  longer than itself.
+- It is no longer than you: peer prey up to `100%` of your length is eligible,
+  but only when it is slower or crossing. The trainer never deliberately hunts a
+  snake longer than itself.
 - It is isolated: at most one other head within `520` units of the target by
   default.
 - It is within the hunt range (`900` units before the aggression scaling) and
@@ -200,7 +223,7 @@ When hunting is enabled, a target must pass all of these gates:
   away at the trainer's speed or faster.
 
 A locked target is kept for up to `4.2 s` so the trainer does not flicker
-between two candidates. While locked, food attraction is cut to `25%`. A
+between two candidates. While locked, food attraction is cut to `8%`. A
 locked target that boosts away or becomes an uncatchable runner is dropped
 rather than followed. A slower target is pressed all the way in; an equal or
 faster target is dropped at half the normal danger clearance. If another snake
@@ -212,7 +235,7 @@ becomes an urgent threat, the hunt is abandoned first.
 | **chase** | Target is running away and is catchable | Overtakes alongside the target's body instead of rear-ending its tail, then closes the gap. |
 | **coil** | A close, equal-or-faster target is not fleeing | Spirals at a stand-off distance to make it turn into your body. |
 | **cut** | Target is head-on, you are ahead of it, or it is slow and close | Cuts across its nose; a smaller snake that hits your trailing body dies. |
-| **bait** | A smaller, fast or boosting snake is chasing from behind | Holds the current line so the trailing body stays in the chaser's path; no boost. |
+| **bait** | A fast or boosting snake of equal-or-smaller length is chasing from behind | Holds the current line so the trailing body stays in the chaser's path; no boost. |
 | **bailout** | Head-contact range against a peer, larger snake or booster | Abandons the hunt for `1.2 s` and lets the body planner handle the threat. |
 
 A target is not worth a head-on coin flip. When the target is within
@@ -249,18 +272,21 @@ rollout described in the main project docs. It reads the game's own state
 - Time-to-collision, closest-approach and persistent faster-chaser checks for
   every visible head inside `2,400` units.
 - Arena-wall clearance, crowd pressure, and a committed escape heading.
-- Soft food attraction, weighted by pellet size, with corpse pellets boosted.
+- Soft food attraction, weighted by pellet size, with corpse pellets and tight
+  pellet clusters boosted.
+- A map-frontier vote for unexplored ground when the local farm is thin and no
+  hunt/feast is active. The frontier is only a score; the rollout can refuse it.
 - Hunt scoring for lead-intercept, chase, coil, cut-across and body-trap paths.
   Target avoidance is softened above `26` units so a cut can close, but below
   the `18`-unit danger margin it becomes a hard safety penalty again.
 - A small continuity bonus to avoid oscillating between two equally safe paths.
-- Gated boost bursts only for a close escape or a clear cut-off on a smaller
-  target; never for ordinary food.
+- Gated boost bursts only for a close escape or a clear cut-off; never for
+  ordinary food.
 
 The planner is deliberately conservative about body clearance. It is intended
 for experimenting with a live session, not for unattended leaderboard farming.
 Raise **Safety** if it feels reckless, lower **Aggro** to reduce hunting, or
-turn **Hunt smaller snakes** off entirely.
+turn **Hunt snakes** off entirely.
 
 ### v0.3.0 live validation
 
@@ -311,14 +337,29 @@ python panel/trainer/tests/test_hunt_radar.py
 python panel/trainer/tests/bench.py --enemies 24 --segments 140
 ```
 
-The `28`-scenario closed-loop suite includes `body_far_head`,
+The `31`-scenario closed-loop suite includes `body_far_head`,
 `body_far_moving`, `body_target_last` and `body_many` for the body fix,
 `hunt_evasive` and `hunt_evasive_peer` for close pursuit against a target that
-flees and repels from the body, and `tail_boost`/`tail_chase` for a smaller
-chaser behind the player. The evasive modes are survival/pressure scenarios,
-not kill assertions; the tail modes assert a kill by the trailing body. See
-[`docs/TRAINER_TESTING.md`](../../docs/TRAINER_TESTING.md) for the root cause,
-test geometry, validation results and live-test checklist.
+flees and repels from the body, `hunt_peer`/`hunt_equal` for peer kills,
+`tail_boost`/`tail_chase`/`tail_equal` for a chaser behind the player, and
+`map_probe` for frontier coverage. The evasive modes are survival/pressure
+scenarios, not kill assertions; the tail and peer modes assert a kill. See
+[`docs/TRAINER_TESTING.md`](../../docs/TRAINER_TESTING.md) for geometry and
+validation, and [`docs/TRAINER_MODULES.md`](../../docs/TRAINER_MODULES.md) for
+the source layout.
+
+### Build
+
+The checked-in `trainer.js` is generated from `panel/trainer/src/`. After
+editing a module:
+
+```bash
+python panel/trainer/build.py
+python panel/trainer/build.py --check
+```
+
+The userscript, bookmarklet and tests all consume the bundle, so there is no
+second runtime with different behaviour.
 
 ---
 
@@ -326,10 +367,13 @@ test geometry, validation results and live-test checklist.
 
 | File | Purpose |
 | --- | --- |
-| `trainer.js` | Self-contained panel, takeover and planner. Paste this into the DevTools console or serve it as a script. |
+| `trainer.js` | Self-contained generated bundle. Paste this into the DevTools console or serve it as a script. |
+| `src/` | Maintainable source modules; rebuild the bundle after edits. |
+| `build.py` | Concatenates the modules into `trainer.js`; `--check` detects a stale bundle. |
 | `trainer.user.js` | Tampermonkey/Greasemonkey loader. Loads `trainer.js` with `@require`. |
 | `bookmarklet.txt` | One-line bookmarklet for a published copy of `trainer.js`. |
 | `tests/` | Offline Playwright scenarios, takeover/UI checks and the FPS benchmark. |
+| `../cheats/state_probe.js` | Read-only client-state probe; see `docs/CLIENT_PROBE.md`. |
 | `README.md` | This file. |
 
 ---

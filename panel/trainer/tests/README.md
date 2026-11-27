@@ -44,13 +44,13 @@ machine.
 ## Run individual suites
 
 ```bash
-# 28 closed-loop collision, wall, hunting, tail-bait, body, feast and radar scenarios
+# 31 closed-loop collision, wall, hunting, peer/equal, tail-bait, map, body, feast and radar scenarios
 python panel/trainer/tests/test_modes.py
 
 # 29 takeover, release, death-handling and input-shield checks
 python panel/trainer/tests/test_takeover.py
 
-# 38 hunt, corpse-feast, radar and panel-control checks
+# 41 hunt, corpse-feast, radar, map/Explore and panel-control checks
 python panel/trainer/tests/test_hunt_radar.py
 
 # planner FPS with a synthetic crowd
@@ -91,29 +91,35 @@ These are deliberately not kill assertions. A target that always turns away and
 matches the trainer's speed can avoid a body trap in open space; the useful
 regression is that the trainer no longer cuts into its body while trying.
 
-`tail_boost` and `tail_chase` cover the opposite geometry: a smaller snake is
-behind the player, driving toward it, and is fast or boosting enough to catch
-the tail. The trainer must hold its line and let the trailing body kill the
-chaser, without a collision or a boost escape. These modes do assert
-`kills >= 1`.
+`tail_boost`, `tail_chase` and `tail_equal` cover the opposite geometry: a
+fast or boosting snake of equal-or-smaller length is behind the player, driving
+toward it, and is committed enough to catch the tail. The trainer must hold its
+line and let the trailing body kill the chaser, without a collision or a boost
+escape. These modes do assert `kills >= 1`.
+
+`hunt_peer` and `hunt_equal` add slower/crossing peer targets. A longer snake is
+still not a deliberate target. These modes assert a kill and zero collisions.
+
+`map_probe` runs with no food and no threats, so the only steering signal is the
+map frontier. The test asserts that the sampled trail covers more than `1%` of
+the reachable grid and at least three cells. A frontier path still has to pass
+the normal rollout clearance and wall checks.
 
 `hunt_early` gets a minimum `16 s` window because the first cut can overshoot the
-short target. `hunt_peer`, `hunt_evasive` and `hunt_evasive_peer` get at least
-`12 s`; the tail modes get at least `10 s`; the runner still accepts a larger
-`--seconds` value.
+short target. `hunt_peer`, `hunt_equal`, `hunt_evasive` and `hunt_evasive_peer`
+get at least `12 s`; the tail and map modes get at least `10 s`; the runner still
+accepts a larger `--seconds` value.
 
 ## Reference result
 
-Validated on Windows with Playwright 1.59.0, headless mode, using the installed
-Chrome 155 channel and Edge 158.0.4370.45:
+Validated with Playwright 1.59.0, headless mode, using the installed default
+browser:
 
 ```text
-test_modes.py       28/28 modes passed (Chrome and Edge)
-test_takeover.py    29/29 checks passed (Chrome and Edge)
-test_hunt_radar.py  38/38 checks passed (Chrome and Edge)
-bench.py             60 fps, 5 enemies x 120 points (Chrome and Edge)
-bench.py --enemies 24 --segments 140
-                     60 fps, 24 enemies x 140 points (Chrome and Edge)
+test_modes.py       31/31 modes passed (installed default browser)
+test_takeover.py    29/29 checks passed (installed default browser)
+test_hunt_radar.py  41/41 checks passed (installed default browser)
+bench.py             60 fps, 5 enemies x 120 points
 ```
 
 Console and page errors are treated as failures. The closed-loop suite also

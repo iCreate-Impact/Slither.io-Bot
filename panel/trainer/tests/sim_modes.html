@@ -83,6 +83,14 @@
     selfMax = 30;
     self.sct = 30;
     enemies = [makeEnemy(2, 16384 - 350, 16384, 0, 6.3, 16)];
+  } else if (mode === "tail_equal") {
+    // A same-size chaser is still a body-trap kill. This is the peer-sized
+    // tail case the live server kept offering and the old ratio gate refused.
+    selfMax = 30;
+    self.sct = 30;
+    var equalChaser = makeEnemy(2, 16384 - 350, 16384, 0, 6.3, 30);
+    equalChaser.noHome = false;
+    enemies = [equalChaser];
   } else if (mode === "headon_boost") {
     // A larger boosting snake runs straight at a short player. The player
     // must be able to boost out of the way even before the old 12-length gate.
@@ -144,6 +152,14 @@
     var peerPrey = makeEnemy(2, 16384 + 330, 16384 + 20, Math.PI / 2, 4.8, 52);
     peerPrey.noHome = true;
     enemies = [peerPrey];
+  } else if (mode === "hunt_equal") {
+    // Equal length, slower and crossing. A peer is not a free kill, but the
+    // body-trap/cut should still finish a target that is not running away.
+    selfMax = 60;
+    self.sct = 60;
+    var equalPrey = makeEnemy(2, 16384 + 330, 16384 + 20, Math.PI / 2, 4.8, 60);
+    equalPrey.noHome = true;
+    enemies = [equalPrey];
   } else if (mode === "hunt_evasive") {
     // Live prey does not drive in a straight line. It turns away from the
     // player and refuses to run into a body, which is the case a straight
@@ -249,6 +265,10 @@
     enemies = crowd;
   } else if (mode === "feast") {
     enemies = [];
+  } else if (mode === "map_probe") {
+    // No local farm and no threats: the frontier/coverage planner is the only
+    // thing that can make the snake move.
+    enemies = [];
   } else if (mode === "radar") {
     enemies = [makeEnemy(2, 16384 + 2200, 16384, Math.PI, 0, 100)];
   }
@@ -262,13 +282,15 @@
   window.slither = self;
   window.slithers = [self].concat(enemies);
   window.foods = [];
-  for (var f = 0; f < 40; f++) {
-    var a = f * Math.PI * 2 / 40;
-    window.foods.push({
-      xx: 16384 + Math.cos(a) * 320,
-      yy: 16384 + Math.sin(a) * 320,
-      sz: 1
-    });
+  if (mode !== "map_probe") {
+    for (var f = 0; f < 40; f++) {
+      var a = f * Math.PI * 2 / 40;
+      window.foods.push({
+        xx: 16384 + Math.cos(a) * 320,
+        yy: 16384 + Math.sin(a) * 320,
+        sz: 1
+      });
+    }
   }
   if (mode === "feast") {
     for (var cf = 0; cf < 10; cf++) {

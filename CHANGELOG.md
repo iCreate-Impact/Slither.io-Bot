@@ -6,6 +6,64 @@ Results are per-run displayed scores, not cumulative across restarts. See [docs/
 
 ---
 
+## [v0.4.0] - 2026-11-27
+
+### Added
+
+- **Modular source:** the trainer is split into foundation, world, map, hunt,
+  feed, planner, control, panel and input modules under `panel/trainer/src/`.
+  `panel/trainer/build.py` concatenates them into the checked-in `trainer.js`
+  bundle; `--check` catches a stale bundle. The userscript, bookmarklet and
+  tests still consume one runtime.
+- **Strategic map/frontier layer:** a coarse visited grid, a sampled trail,
+  coverage percentage and nearest-unvisited frontier. The frontier heading is
+  a planner vote only when no hunt/feast is active, danger is calm and the
+  nearby food field is thin. Coverage and frontier distance are shown in the
+  panel; the **Explore** slider controls the vote.
+- **Food-density value:** tight pellet streams and corpse clusters get a
+  grid-based density boost. Food lanes reach farther, the default food pull is
+  `1.15`, and food attraction is cut to `8%` while a hunt is live so a farm
+  cannot pull the snake off a kill.
+- **Peer hunting:** target selection now allows prey up to `100%` of the
+  trainer's length when it is slower or crossing. A longer snake is still
+  rejected, and the close-range head-on bailout still applies to peers.
+- **Equal-size tail bait:** a same-size chaser behind the player is eligible
+  for the trailing-body trap. This is a common live shape that the old `0.9`
+  ratio gate ignored.
+- **Client-state probe:** `panel/cheats/state_probe.js` is a read-only probe
+  for visible arena, snake, food and trainer map state. It never writes
+  steering/boost, sends packets, touches memory or starts a run. See
+  `docs/CLIENT_PROBE.md`.
+
+### Changed
+
+- `hunt_peer` and `hunt_equal` now assert a kill; `tail_equal` covers the
+  same-size chaser; `map_probe` asserts frontier coverage without food.
+- The panel labels the hunt toggle **Hunt snakes** and adds an **Explore**
+  slider and a map coverage/frontier line.
+- Version is `0.4.0` in the trainer and userscript loader.
+
+### Validated
+
+- Closed-loop suite: `31/31` modes passed in the installed default browser,
+  including the new peer, equal-tail and map modes, with zero simulated
+  collisions.
+- Takeover/input-shield suite: `29/29` checks passed.
+- Hunt/radar/UI suite: `41/41` checks passed, including the new Explore\n  control, map line and food-density weighting.
+- Benchmark: `60 fps` with five enemies x `120` points.
+- The production trainer still never launches a browser, navigates, clicks
+  **Play**, reconnects, or creates a run.
+
+### Known limitations
+
+- The map is built only from client-visible state. It cannot reveal snakes or
+  food the client has not received, and it does not add a server query.
+- Equal peer kills remain harder than smaller-prey kills. The added tail bait
+  does not make a head-on trade safe.
+- No live v0.4.0 result is recorded in this changelog yet.
+
+---
+
 ## [v0.3.0] - 2026-11-27
 
 ### Added

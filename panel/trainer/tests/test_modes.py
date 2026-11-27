@@ -34,6 +34,7 @@ DEFAULT_MODES = [
     "behind_boost_short",
     "tail_boost",
     "tail_chase",
+    "tail_equal",
     "hunt",
     "hunt_cut",
     "hunt_far",
@@ -41,6 +42,7 @@ DEFAULT_MODES = [
     "hunt_flee",
     "hunt_early",
     "hunt_peer",
+    "hunt_equal",
     "hunt_evasive",
     "hunt_evasive_peer",
     "hunt_bigger",
@@ -50,6 +52,7 @@ DEFAULT_MODES = [
     "body_target_last",
     "body_many",
     "feast",
+    "map_probe",
     "radar",
 ]
 
@@ -92,9 +95,9 @@ def main() -> int:
                 # first cut can overshoot, so give it a little more margin.
                 if mode == "hunt_early":
                     seconds = max(args.seconds, 16.0)
-                elif mode in ("hunt_peer", "hunt_evasive", "hunt_evasive_peer"):
+                elif mode in ("hunt_peer", "hunt_equal", "hunt_evasive", "hunt_evasive_peer"):
                     seconds = max(args.seconds, 12.0)
-                elif mode in ("tail_boost", "tail_chase"):
+                elif mode in ("tail_boost", "tail_chase", "tail_equal", "map_probe"):
                     seconds = max(args.seconds, 10.0)
                 else:
                     seconds = args.seconds
@@ -130,6 +133,9 @@ def main() -> int:
                         target: window.__slitherTrainer.state.huntTarget
                           ? String(window.__slitherTrainer.state.huntTarget.id)
                           : null,
+                        coverage: window.__slitherTrainer.state.coverage,
+                        mapVisited: window.__slitherTrainer.state.mapVisited,
+                        mapCells: window.__slitherTrainer.state.mapCells,
                         bodyIds: (window.__slitherTrainer.state.snapshot
                           ? window.__slitherTrainer.state.snapshot.threats
                           : []).map((point) => String(point.id))
@@ -150,6 +156,9 @@ def main() -> int:
                     and info["sim"]["minEnemy"] > 34
                     and info["sim"]["minWall"] > 0
                 )
+                if mode == "map_probe":
+                    ok = ok and info["state"]["coverage"] > 0.01 and \
+                        info["state"]["mapVisited"] >= 3
                 if mode == "body_target_last":
                     final_target_ok = (
                         info["state"]["target"] is not None
@@ -162,7 +171,8 @@ def main() -> int:
                     )
                     ok = ok and (final_target_ok or early_target_ok)
                 if mode in (
-                    "hunt_early", "hunt_peer", "tail_boost", "tail_chase"
+                    "hunt_early", "hunt_peer", "hunt_equal",
+                    "tail_boost", "tail_chase", "tail_equal"
                 ):
                     ok = ok and info["sim"].get("kills", 0) >= 1
                 # hunt_evasive / hunt_evasive_peer are pressure scenarios:

@@ -59,6 +59,7 @@ def sample(page):
             hunt: t.settings.hunt,
             aggression: t.settings.aggression,
             safety: t.settings.safety,
+            explore: t.settings.explore,
             boostEscape: t.settings.boostEscape,
             snapshot: !!t.snapshot,
             snapRange: t.snapshot ? t.snapshot.range : null,
@@ -221,6 +222,10 @@ def main():
         page.add_script_tag(path=TRAINER)
         page.wait_for_timeout(350)
         page.evaluate(
+            "() => document.getElementById('slither-trainer-host').shadowRoot.getElementById('takeBtn').click()"
+        )
+        page.wait_for_timeout(400)
+        page.evaluate(
             """() => {
               const root = document.getElementById('slither-trainer-host').shadowRoot;
               const hunt = root.getElementById('hunt');
@@ -234,6 +239,10 @@ def main():
               sf.value = '30';
               sf.dispatchEvent(new Event('input', {bubbles: true}));
               sf.dispatchEvent(new Event('change', {bubbles: true}));
+              const ex = root.getElementById('explore');
+              ex.value = '1';
+              ex.dispatchEvent(new Event('input', {bubbles: true}));
+              ex.dispatchEvent(new Event('change', {bubbles: true}));
               const be = root.getElementById('boostEscape');
               be.checked = false;
               be.dispatchEvent(new Event('change', {bubbles: true}));
@@ -247,6 +256,8 @@ def main():
               return {
                 ag: root.getElementById('aggressionOut').textContent,
                 sf: root.getElementById('safetyOut').textContent,
+                ex: root.getElementById('exploreOut').textContent,
+                map: root.getElementById('mapline').textContent,
                 hunt: root.getElementById('hunt').checked,
                 boost: root.getElementById('boostEscape').checked
               };
@@ -255,7 +266,26 @@ def main():
         check("ui hunt off", s["hunt"] is False and outs["hunt"] is False, json.dumps(s))
         check("ui aggression", s["aggression"] == 2 and outs["ag"] == "2.0", json.dumps(outs))
         check("ui safety", s["safety"] == 30 and outs["sf"] == "30", json.dumps(outs))
+        check("ui explore", s["explore"] == 1 and outs["ex"] == "1.0", json.dumps(outs))
+        check("ui map line", outs["map"].startswith("Map ") and "%" in outs["map"],
+              outs["map"])
         check("ui boost off", s["boostEscape"] is False and outs["boost"] is False, json.dumps(outs))
+
+        density = page.evaluate(
+            """() => {
+              const foods = [
+                {x: 100, y: 100, sz: 1, w: 1},
+                {x: 130, y: 100, sz: 1, w: 1},
+                {x: 160, y: 100, sz: 1, w: 1},
+                {x: 190, y: 100, sz: 1, w: 1},
+                {x: 9000, y: 9000, sz: 1, w: 1}
+              ];
+              window.__slitherTrainer.planner.enrichFoodDensity(foods);
+              return {cluster: foods[0].w, isolated: foods[4].w};
+            }"""
+        )
+        check("feed density boosts cluster", density["cluster"] > density["isolated"],
+              json.dumps(density))
 
         page.evaluate(
             "() => document.getElementById('slither-trainer-host').shadowRoot.getElementById('minBtn').click()"
