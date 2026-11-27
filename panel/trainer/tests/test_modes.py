@@ -86,7 +86,26 @@ def main() -> int:
                 # Early/peer chases need enough time to close a 300+ unit gap
                 # without a cut boost; keep the rest of the suite fast.
                 seconds = max(args.seconds, 12.0) if mode in ("hunt_early", "hunt_peer") else args.seconds
-                page.wait_for_timeout(int(seconds * 1000))
+                early = None
+                if mode == "body_target_last":
+                    # The trainer is now aggressive enough to kill this
+                    # stationary target. Capture the body-priority snapshot
+                    # while the target is still alive, then finish the run to
+                    # check that the kill was clean.
+                    page.wait_for_timeout(1500)
+                    early = page.evaluate(
+                        """() => ({
+                          target: window.__slitherTrainer.state.huntTarget
+                            ? String(window.__slitherTrainer.state.huntTarget.id)
+                            : null,
+                          bodyIds: (window.__slitherTrainer.state.snapshot
+                            ? window.__slitherTrainer.state.snapshot.threats
+                            : []).map((point) => String(point.id))
+                        })"""
+                    )
+                    page.wait_for_timeout(max(0, int(seconds * 1000) - 1500))
+                else:
+                    page.wait_for_timeout(int(seconds * 1000))
                 info = page.evaluate(
                     """() => ({
                       sim: window.__sim,
@@ -120,11 +139,16 @@ def main() -> int:
                     and info["sim"]["minWall"] > 0
                 )
                 if mode == "body_target_last":
-                    ok = (
-                        ok
-                        and info["state"]["target"] is not None
+                    final_target_ok = (
+                        info["state"]["target"] is not None
                         and info["state"]["target"] in info["state"]["bodyIds"]
                     )
+                    early_target_ok = (
+                        early is not None
+                        and early["target"] is not None
+                        and early["target"] in early["bodyIds"]
+                    )
+                    ok = ok and (final_target_ok or early_target_ok)
                 if mode in ("hunt_early", "hunt_peer"):
                     ok = ok and info["sim"].get("kills", 0) >= 1
                 results.append((mode, ok, info, errors))

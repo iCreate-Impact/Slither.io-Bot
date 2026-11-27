@@ -77,13 +77,17 @@
     BOOST_CLEAR: 12,
     BOOST_MS: 800,
     BOOST_COOLDOWN: 350,
+    HEADON_BOOST_MS: 1200,
+    HEADON_BOOST_COOLDOWN: 120,
     CUT_BOOST_MS: 300,
     CUT_BOOST_COOLDOWN: 3400,
     CHASE_BOOST_MS: 280,
     CHASE_BOOST_COOLDOWN: 2600,
+    HUNT_BOOST_MS: 500,
+    HUNT_BOOST_COOLDOWN: 1000,
     PREV_BONUS: 10,
     RADAR_RANGE: 2400,
-    HUNT_MIN_LEN: 10,
+    HUNT_MIN_LEN: 6,
     HUNT_MAX_RATIO: 0.90,
     HUNT_MIN_DIST: 75,
     HUNT_MAX_DIST: 900,
@@ -96,6 +100,9 @@
     HUNT_BODY_BONUS: 85,
     HUNT_FOOD_SCALE: 0.25,
     HUNT_CLEAR_CAP: 26,
+    OPEN_BIAS: 55,
+    OPEN_RANGE: 1900,
+    OPEN_COMMIT_MS: 3200,
     SAFE_BONUS: 2000,
     UNSAFE_PENALTY: 2000
   };
@@ -203,10 +210,13 @@
     boostCooldownUntil: 0,
     cutBoostCooldownUntil: 0,
     chaseBoostCooldownUntil: 0,
+    huntBoostCooldownUntil: 0,
     chaseUntil: 0,
     escapeHeading: null,
     escapeThreatId: null,
     escapeUntil: 0,
+    migrateHeading: null,
+    migrateUntil: 0,
     danger: 0,
     nearest: null,
     huntTargetId: null,
@@ -556,6 +566,7 @@
     var crowd = 0;
     var chaseThreat = false;
     var selfSpeed = Math.max(TUNE.SPEED_MIN, num(me.sp, 5.5) * TUNE.SPEED_MULT);
+    var selfLen = Math.max(0, num(me.sct, 0));
     var selfAng = num(me.ang, 0);
     var svx = Math.cos(selfAng) * selfSpeed;
     var svy = Math.sin(selfAng) * selfSpeed;
@@ -571,7 +582,11 @@
           sct: h.sct, boost: h.boost, id: h.id
         };
       }
-      if (d < 620) crowd++;
+      // A three-length snake near a twenty-length snake is food or a
+      // nuisance, not a reason to abandon a hunt. Its head can still kill on
+      // contact, but the path planner already treats that as a hard obstacle.
+      var tiny = h.sct < selfLen * 0.45;
+      if (d < 620 && !tiny) crowd++;
       if (d > TUNE.THREAT_RANGE) continue;
       var nx = dx / Math.max(1, d);
       var ny = dy / Math.max(1, d);
@@ -598,7 +613,8 @@
       // catch up. React before it is already on our tail.
       var toEnemy = Math.atan2(dy, dx);
       var behind = Math.cos(angleDiff(toEnemy, selfAng)) < -0.25;
-      if (behind && h.speed > selfSpeed * 1.03 && d < 1000) {
+      var towardUs = Math.cos(angleDiff(h.ang, toEnemy + Math.PI)) > 0.15;
+      if (behind && towardUs && !tiny && h.speed > selfSpeed * 1.03 && d < 1000) {
         chaseThreat = true;
         var catchT = d / Math.max(1, h.speed - selfSpeed);
         var chase = clamp(1 - catchT / 30, 0, 1) * 0.55 +
@@ -606,11 +622,12 @@
         if (chase > t) t = chase;
       }
       if (h.boost) t *= 1.3;
-      if (h.sct > num(me.sct, 0) * 1.15) t *= 1.12;
+      if (tiny) t *= 0.45;
+      if (h.sct > selfLen * 1.15) t *= 1.12;
       if (t > level) level = t;
       if (t > 0.62) urgent = true;
-      if (closing > 30 && cpa < 80 && ttc < 0.95) urgent = true;
-      if (d < 130) urgent = true;
+      if (closing > 30 && cpa < 80 && ttc < 0.95 && !tiny) urgent = true;
+      if (d < (tiny ? 95 : 130)) urgent = true;
     }
     if (crowd > 3) level += (crowd - 3) * 0.12;
     if (crowd > 6) urgent = true;
@@ -624,6 +641,44 @@
       level: clamp(level, 0, 1.5), urgent: urgent, nearest: nearest,
       crowd: crowd, wall: wall, chase: chaseThreat
     };
+  }
+
+  // Pick the least crowded sector around the player. This is not a panic
+  // turn: it is what stops a short snake from being herded through a pack of
+  // larger snakes for the whole run. Food and hunting still win when the
+  // local area is calm, because the bias only scales with nearby threat
+  // density.
+  function chooseOpenHeading(me, threats, arena, excludeId) {
+    var heads = threats.heads;
+    var selfLen = num(me.sct, 0);
+    var best = null;
+    var bestScore = -Infinity;
+    for (var i = 0; i < 24; i++) {
+      var a = (i * TAU) / 24;
+      var score = 0;
+      for (var j = 0; j < heads.length; j++) {
+        var h = heads[j];
+        if (excludeId !== undefined && excludeId !== null && String(h.id) === String(excludeId)) continue;
+        var d = Math.sqrt(dist2(me.xx, me.yy, h.x, h.y));
+        if (d > TUNE.OPEN_RANGE) continue;
+        var toH = Math.atan2(h.y - me.yy, h.x - me.xx);
+        var align = Math.cos(angleDiff(a, toH));
+        if (align <= 0) continue;
+        var weight = 1 - d / TUNE.OPEN_RANGE;
+        var size = h.sct > selfLen * 1.15 ? 2.2 : (h.sct > selfLen * 0.85 ? 1.5 : 1);
+        score -= align * align * weight * size * (h.boost ? 1.25 : 1) * 10;
+      }
+      var ex = me.xx + Math.cos(a) * 600;
+      var ey = me.yy + Math.sin(a) * 600;
+      var wall = arena.r - Math.sqrt(dist2(ex, ey, arena.cx, arena.cy)) - TUNE.WALL_MARGIN - 100;
+      if (wall < 0) score += wall * 0.8;
+      score += Math.cos(angleDiff(a, num(me.ang, 0))) * 2;
+      if (!best || score > bestScore) {
+        best = a;
+        bestScore = score;
+      }
+    }
+    return best;
   }
 
   function selectHuntTarget(me, threats, arena, now) {
@@ -821,6 +876,10 @@
       }
       foodScore *= state.settings.foodPull;
       var foodScale = ctx.huntTarget ? TUNE.HUNT_FOOD_SCALE : 1;
+      // Do not trade a safe escape line for a pellet. During an urgent dodge
+      // food has almost no vote; otherwise a ring of food can pull the snake
+      // back across the nose it is trying to leave.
+      if (ctx.escape) foodScale *= 0.06;
       score += foodScore * TUNE.FOOD_WEIGHT * foodScale;
 
       // A lane bonus makes distant food visible to the planner instead of
@@ -923,6 +982,10 @@
       var escapeWeight = TUNE.ESCAPE_BIAS * clamp(num(ctx.danger && ctx.danger.level, 0), 0, 1);
       score += Math.cos(angleDiff(targetHeading, away)) * escapeWeight;
     }
+    if (ctx.openHeading !== null && ctx.openHeading !== undefined && ctx.openWeight > 0) {
+      score += Math.cos(angleDiff(targetHeading, ctx.openHeading)) *
+        TUNE.OPEN_BIAS * ctx.openWeight;
+    }
     if (ctx.danger && ctx.danger.wall < TUNE.WALL_MARGIN + 220) {
       var toCenter = Math.atan2(arena.cy - me.yy, arena.cx - me.xx);
       score += Math.cos(angleDiff(targetHeading, toCenter)) * 14;
@@ -967,22 +1030,21 @@
     var i;
 
     var danger = assessDanger(me, threats, arena);
-    if (danger.chase) state.chaseUntil = now + 1600;
-    var chaseActive = now < state.chaseUntil;
-    if (chaseActive) danger.level = Math.max(danger.level, 0.62);
     state.danger = danger.level;
     state.nearest = danger.nearest;
     if (state.corpse && now >= state.corpse.until) state.corpse = null;
     detectCorpse(foods, now);
 
     var target = selectHuntTarget(me, threats, arena, now);
+    var selfLen = Math.max(0, num(me.sct, 0));
     var modeDanger = danger;
     if (target) {
       // Ignore the target itself when deciding whether hunting is safe.
       // Otherwise an incoming smaller snake would always look like danger,
       // and the trainer would flee instead of cutting across its nose.
       modeDanger = assessDanger(me, threats, arena, target.id);
-      if (modeDanger.urgent || modeDanger.level > 0.58) {
+      var keepSmall = target.sct < selfLen * 0.8 && target.d < 520;
+      if ((modeDanger.urgent || modeDanger.level > 0.58) && !keepSmall) {
         target = null;
         state.huntTarget = null;
         state.huntTargetId = null;
@@ -1053,21 +1115,53 @@
         // inside its line and lets a faster snake close the gap. Step across
         // its nose instead. The side pick keeps the dodge away from the wall
         // and from a second head where possible.
-        var enemyAtUs = Math.cos(angleDiff(near.ang, enemyFromMe));
+        var enemyAtUs = Math.cos(angleDiff(near.ang, enemyFromMe + Math.PI));
         var headOn = enemyAtUs > 0.25 && near.d < 900;
-        // Commit to one escape line for about a second. Recomputing the
-        // away vector every frame makes the snake spiral, which lets a
-        // faster chaser cut the inside of the turn.
-        state.escapeHeading = isBehind ? away + side * 0.95 :
-          (headOn ? away + side * 1.05 : away);
+        // A head-on escape must leave the enemy's line, not orbit its nose.
+        // Lock a perpendicular world heading for long enough to actually
+        // break away; recomputing "away" every second just circles the head
+        // while the faster snake turns inside the loop.
+        var escapeAngle = away;
+        if (isBehind) {
+          escapeAngle = away + side * 0.95;
+        } else if (headOn) {
+          var perpA = near.ang + Math.PI / 2;
+          var perpB = near.ang - Math.PI / 2;
+          escapeAngle = Math.cos(angleDiff(perpA, away)) >=
+            Math.cos(angleDiff(perpB, away)) ? perpA : perpB;
+        }
+        state.escapeHeading = escapeAngle;
         state.escapeThreatId = nearId;
-        state.escapeUntil = now + (headOn ? 850 : 1100);
+        state.escapeUntil = now + (headOn ? 1800 : 1100);
       }
       evadeHeading = state.escapeHeading;
     } else {
       state.escapeHeading = null;
       state.escapeThreatId = null;
       state.escapeUntil = 0;
+    }
+
+    var openHeading = null;
+    var openWeight = 0;
+    if (threats.heads.length > 1) {
+      if (state.migrateHeading === null || now >= state.migrateUntil) {
+        state.migrateHeading = chooseOpenHeading(me, threats, arena, target ? target.id : null);
+        state.migrateUntil = now + TUNE.OPEN_COMMIT_MS;
+      }
+      openHeading = state.migrateHeading;
+      var nearbyHeads = 0;
+      for (i = 0; i < threats.heads.length; i++) {
+        if (dist2(me.xx, me.yy, threats.heads[i].x, threats.heads[i].y) < 1200 * 1200) {
+          nearbyHeads++;
+        }
+      }
+      openWeight = nearbyHeads <= 1 ? 0 :
+        clamp(0.04 + (nearbyHeads - 1) * 0.18 + danger.level * 0.35, 0, 1);
+      if (target) openWeight *= 0.3;
+      if (modeDanger.urgent) openWeight *= 0.2;
+    } else {
+      state.migrateHeading = null;
+      state.migrateUntil = 0;
     }
 
     var ctx = {
@@ -1087,7 +1181,9 @@
       emergency: !!(danger.urgent && danger.nearest && danger.nearest.d < 340),
       danger: modeDanger,
       nearest: modeDanger.nearest || danger.nearest,
-      evadeHeading: evadeHeading
+      evadeHeading: evadeHeading,
+      openHeading: openHeading,
+      openWeight: openWeight
     };
 
     for (i = 0; i < TUNE.COARSE_N; i++) {
@@ -1167,8 +1263,12 @@
           // A lateral escape is valid even when it is not pointing straight
           // away from the head. Only refuse a boost that drives into the nose.
           if (Math.cos(angleDiff(best.heading, away)) > -0.1) {
-            state.boostUntil = now + TUNE.BOOST_MS;
-            state.boostCooldownUntil = now + TUNE.BOOST_MS + TUNE.BOOST_COOLDOWN;
+            var toNear = Math.atan2(nearest.y - me.yy, nearest.x - me.xx);
+            var incoming = Math.cos(angleDiff(nearest.ang, toNear + Math.PI)) > 0.2;
+            var boostMs = incoming ? TUNE.HEADON_BOOST_MS : TUNE.BOOST_MS;
+            var coolMs = incoming ? TUNE.HEADON_BOOST_COOLDOWN : TUNE.BOOST_COOLDOWN;
+            state.boostUntil = now + boostMs;
+            state.boostCooldownUntil = now + boostMs + coolMs;
             boost = true;
           }
         }
@@ -1198,6 +1298,25 @@
       if (Math.cos(angleDiff(best.heading, chaseTo)) > 0.15) {
         state.boostUntil = now + TUNE.CHASE_BOOST_MS;
         state.chaseBoostCooldownUntil = now + TUNE.CHASE_BOOST_MS + TUNE.CHASE_BOOST_COOLDOWN;
+        boost = true;
+      }
+    }
+    // Equal-speed snakes are the common live case. Without a committed
+    // boost the trainer can follow one for thirty seconds while it grows,
+    // which is not hunting. Close the gap, get ahead, then let the target
+    // run into the body we have already placed across its path.
+    if (!boost && target && state.settings.boostEscape && mode !== 'escape' &&
+        now > state.huntBoostCooldownUntil &&
+        (mode === 'cut' || mode === 'chase' || mode === 'coil' || mode === 'hunt') &&
+        target.d > 110 && target.d < 620 &&
+        target.speed < baseSpeed * 1.06 &&
+        target.sct <= num(me.sct, 0) * 0.92 &&
+        num(me.sct, 0) >= 12 &&
+        best.minClear > 26 && best.minWall > 120) {
+      var huntTo = Math.atan2(target.y - me.yy, target.x - me.xx);
+      if (Math.cos(angleDiff(best.heading, huntTo)) > 0.1) {
+        state.boostUntil = now + TUNE.HUNT_BOOST_MS;
+        state.huntBoostCooldownUntil = now + TUNE.HUNT_BOOST_MS + TUNE.HUNT_BOOST_COOLDOWN;
         boost = true;
       }
     }
@@ -2043,10 +2162,13 @@
     state.huntUntil = 0;
     state.cutBoostCooldownUntil = 0;
     state.chaseBoostCooldownUntil = 0;
+    state.huntBoostCooldownUntil = 0;
     state.chaseUntil = 0;
     state.escapeHeading = null;
     state.escapeThreatId = null;
     state.escapeUntil = 0;
+    state.migrateHeading = null;
+    state.migrateUntil = 0;
     if (full) {
       state.kills = 0;
       state.corpse = null;
