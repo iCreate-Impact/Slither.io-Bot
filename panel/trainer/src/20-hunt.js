@@ -48,6 +48,7 @@
     var urgent = false;
     var nearest = null;
     var crowd = 0;
+    var nearby = 0;
     var chaseThreat = false;
     var selfSpeed = Math.max(TUNE.SPEED_MIN, num(me.sp, 5.5) * TUNE.SPEED_MULT);
     var selfLen = Math.max(0, num(me.sct, 0));
@@ -71,6 +72,7 @@
       // contact, but the path planner already treats that as a hard obstacle.
       var tiny = h.sct < selfLen * 0.45;
       if (d < 620 && !tiny) crowd++;
+      if (d < 1200 && !tiny) nearby++;
       if (d > TUNE.THREAT_RANGE) continue;
       var nx = dx / Math.max(1, d);
       var ny = dy / Math.max(1, d);
@@ -98,6 +100,16 @@
       var toEnemy = Math.atan2(dy, dx);
       var behind = Math.cos(angleDiff(toEnemy, selfAng)) < -0.25;
       var towardUs = Math.cos(angleDiff(h.ang, toEnemy + Math.PI)) > 0.15;
+      // A much larger snake that is closing or boosting nearby is an
+      // existential threat even while it is still outside head-on range.
+      // React before it is close enough to trap the player against a second
+      // body; the old model only counted near heads and late time-to-collision.
+      if (d < 1200 && h.sct > selfLen * 1.3 &&
+          h.speed > selfSpeed * 1.1 && towardUs) {
+        var bigThreat = (1 - d / 1200) * 0.85;
+        if (h.boost) bigThreat *= 1.15;
+        if (bigThreat > t) t = bigThreat;
+      }
       if (behind && towardUs && !tiny && h.speed > selfSpeed * 1.03 && d < 1000) {
         chaseThreat = true;
         var catchT = d / Math.max(1, h.speed - selfSpeed);
@@ -115,6 +127,8 @@
     }
     if (crowd > 3) level += (crowd - 3) * 0.12;
     if (crowd > 6) urgent = true;
+    if (nearby > 2) level += (nearby - 2) * 0.09;
+    if (nearby > 6) urgent = true;
     var wd = Math.sqrt(dist2(me.xx, me.yy, arena.cx, arena.cy));
     var wall = arena.r - wd;
     if (wall < TUNE.WALL_MARGIN + 200) {
@@ -123,7 +137,7 @@
     if (wall < TUNE.WALL_MARGIN) urgent = true;
     return {
       level: clamp(level, 0, 1.5), urgent: urgent, nearest: nearest,
-      crowd: crowd, wall: wall, chase: chaseThreat
+      crowd: crowd, nearby: nearby, wall: wall, chase: chaseThreat
     };
   }
 

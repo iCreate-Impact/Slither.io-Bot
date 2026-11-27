@@ -11,6 +11,7 @@
 
     var me = liveSelf();
     if (me) {
+      state.missingSince = 0;
       var id = num(me.id, 0);
       if (state.sessionId !== id) {
         state.sessionId = id;
@@ -29,12 +30,19 @@
         sampleSnapshot(me, now);
       }
     } else {
-      if (state.takeover) {
-        // A death or disconnect ends control. It never clicks Play.
+      // A transient disconnect can clear window.playing and window.slither
+      // for a few frames while the client reconnects to the same run. Do not
+      // release on the first missing frame: that leaves a healthy snake
+      // unsteered. A sustained loss is still treated as the session ending,
+      // and it never clicks Play.
+      if (!state.missingSince) state.missingSince = now;
+      var sessionGone = now - state.missingSince >= TUNE.SESSION_GRACE_MS;
+      if (state.takeover && sessionGone) {
         stopTakeover(state.settings.autoArm, 'session ended');
       }
-      if (state.sessionId !== null) {
+      if (state.sessionId !== null && (!state.takeover || sessionGone)) {
         state.sessionId = null;
+        state.missingSince = 0;
         state.snapshot = null;
         state.mode = 'idle';
         state.heading = 0;

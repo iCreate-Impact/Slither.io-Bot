@@ -122,6 +122,10 @@
     MAP_FRONTIER_MS: 700,
     MAP_TARGET_DIST: 300,
     MAP_WALL_PAD: 500,
+    // A live tab can briefly lose window.playing/window.slither while the
+    // game reconnects or swaps a server. Releasing on the first missing frame
+    // leaves a healthy snake unsteered; wait for a sustained loss instead.
+    SESSION_GRACE_MS: 2500,
     SAFE_BONUS: 2000,
     UNSAFE_PENALTY: 2000
   };
@@ -218,6 +222,7 @@
     hidden: false,
     minimized: false,
     sessionId: null,
+    missingSince: 0,
     mode: 'idle',
     heading: 0,
     clearance: null,
@@ -589,8 +594,12 @@
   };
 
   function mapArenaKey(arena) {
-    return Math.round(arena.cx) + ':' + Math.round(arena.cy) + ':' +
-      Math.round(arena.r);
+    // flux_grd can jitter by a few units as the client receives updates.
+    // The old one-unit key reset the grid on almost every frame, so live
+    // coverage never accumulated and the frontier never pulled the snake.
+    // Bucket the arena geometry instead; a real arena change still resets it.
+    return Math.round(arena.cx / 250) + ':' +
+      Math.round(arena.cy / 250) + ':' + Math.round(arena.r / 250);
   }
 
   function mapReset(me, arena, now) {
@@ -815,6 +824,7 @@
     var urgent = false;
     var nearest = null;
     var crowd = 0;
+    var nearby = 0;
     var chaseThreat = false;
     var selfSpeed = Math.max(TUNE.SPEED_MIN, num(me.sp, 5.5) * TUNE.SPEED_MULT);
     var selfLen = Math.max(0, num(me.sct, 0));
@@ -838,6 +848,7 @@
       // contact, but the path planner already treats that as a hard obstacle.
       var tiny = h.sct < selfLen * 0.45;
       if (d < 620 && !tiny) crowd++;
+      if (d < 1200 && !tiny) nearby++;
       if (d > TUNE.THREAT_RANGE) continue;
       var nx = dx / Math.max(1, d);
       var ny = dy / Math.max(1, d);
@@ -865,6 +876,16 @@
       var toEnemy = Math.atan2(dy, dx);
       var behind = Math.cos(angleDiff(toEnemy, selfAng)) < -0.25;
       var towardUs = Math.cos(angleDiff(h.ang, toEnemy + Math.PI)) > 0.15;
+      // A much larger snake that is closing or boosting nearby is an
+      // existential threat even while it is still outside head-on range.
+      // React before it is close enough to trap the player against a second
+      // body; the old model only counted near heads and late time-to-collision.
+      if (d < 1200 && h.sct > selfLen * 1.3 &&
+          h.speed > selfSpeed * 1.1 && towardUs) {
+        var bigThreat = (1 - d / 1200) * 0.85;
+        if (h.boost) bigThreat *= 1.15;
+        if (bigThreat > t) t = bigThreat;
+      }
       if (behind && towardUs && !tiny && h.speed > selfSpeed * 1.03 && d < 1000) {
         chaseThreat = true;
         var catchT = d / Math.max(1, h.speed - selfSpeed);
@@ -882,6 +903,8 @@
     }
     if (crowd > 3) level += (crowd - 3) * 0.12;
     if (crowd > 6) urgent = true;
+    if (nearby > 2) level += (nearby - 2) * 0.09;
+    if (nearby > 6) urgent = true;
     var wd = Math.sqrt(dist2(me.xx, me.yy, arena.cx, arena.cy));
     var wall = arena.r - wd;
     if (wall < TUNE.WALL_MARGIN + 200) {
@@ -890,7 +913,7 @@
     if (wall < TUNE.WALL_MARGIN) urgent = true;
     return {
       level: clamp(level, 0, 1.5), urgent: urgent, nearest: nearest,
-      crowd: crowd, wall: wall, chase: chaseThreat
+      crowd: crowd, nearby: nearby, wall: wall, chase: chaseThreat
     };
   }
 
@@ -1351,6 +1374,19 @@
     };
   }
 
+  function boostPathSafe(me, heading, ctx) {
+    // Every boost gate evaluates the chosen line at normal speed. Re-run the
+    // winner at boost speed before spending a burst, because a turn that is
+    // safe at base speed can put the head inside a body at 430 units/s. A
+    // boost is never a substitute for a bailout in an already-overlapping
+    // line.
+    var base = ctx.speed;
+    ctx.speed = TUNE.BOOST_SPEED;
+    var res = evaluatePath(me, heading, ctx);
+    ctx.speed = base;
+    return res.minClear >= 0 && res.minWall > 60;
+  }
+
   function nearestHead(me, heads) {
     var best = null;
     for (var i = 0; i < heads.length; i++) {
@@ -1482,6 +1518,26 @@
         state.escapeThreatId !== nearId;
       if (needNew) {
         var away = Math.atan2(me.yy - near.y, me.xx - near.x);
+        // A single nearest-head escape can run straight into the second
+        // snake that is closing from another side. Use a weighted flee vector
+        // from every non-target head, with boosted and larger heads counting
+        // more, then use the nearest head only for the head-on side choice.
+        var ax = 0;
+        var ay = 0;
+        var aw = 0;
+        for (i = 0; i < threats.heads.length; i++) {
+          var fh = threats.heads[i];
+          if (targetKey && String(fh.id) === targetKey) continue;
+          var fd = Math.sqrt(dist2(me.xx, me.yy, fh.x, fh.y));
+          if (fd < 1 || fd > TUNE.THREAT_RANGE) continue;
+          var fw = 1 / (80 + fd);
+          if (fh.boost) fw *= 1.45;
+          if (fh.sct > selfLen * 1.2) fw *= 1.25;
+          ax += ((me.xx - fh.x) / fd) * fw;
+          ay += ((me.yy - fh.y) / fd) * fw;
+          aw += fw;
+        }
+        if (aw > 0.001) away = Math.atan2(ay, ax);
         var toCenter = Math.atan2(arena.cy - me.yy, arena.cx - me.xx);
         var left = away + Math.PI / 2;
         var right = away - Math.PI / 2;
@@ -1499,7 +1555,8 @@
         // A head-on escape must leave the enemy's line, not orbit its nose.
         // Lock a perpendicular world heading for long enough to actually
         // break away; recomputing "away" every second just circles the head
-        // while the faster snake turns inside the loop.
+        // while the faster snake turns inside the loop. In a crowd, shorten
+        // the lock so the flee vector can follow the nearest opening.
         var escapeAngle = away;
         if (isBehind) {
           escapeAngle = away + side * 0.95;
@@ -1511,7 +1568,8 @@
         }
         state.escapeHeading = escapeAngle;
         state.escapeThreatId = nearId;
-        state.escapeUntil = now + (headOn ? 1800 : 1100);
+        state.escapeUntil = now +
+          (headOn ? 1800 : (modeDanger.nearby > 3 ? 650 : 1100));
       }
       evadeHeading = state.escapeHeading;
     } else {
@@ -1537,7 +1595,7 @@
       openWeight = nearbyHeads <= 1 ? 0 :
         clamp(0.04 + (nearbyHeads - 1) * 0.18 + danger.level * 0.35, 0, 1);
       if (target) openWeight *= 0.3;
-      if (modeDanger.urgent) openWeight *= 0.2;
+      if (modeDanger.urgent) openWeight *= modeDanger.crowd > 2 ? 0.65 : 0.2;
     } else {
       state.migrateHeading = null;
       state.migrateUntil = 0;
@@ -1654,12 +1712,16 @@
     }
 
     var boost = now < state.boostUntil;
-    if (boost && best.minWall < 60) {
+    if (boost && (best.minClear < 0 || best.minWall < 60)) {
+      // A burst widens the turn radius. If the planned line is already at or
+      // past the safety envelope, cancel the boost and give the planner the
+      // sharper base-speed turn next frame.
       boost = false;
       state.boostUntil = 0;
     }
     if (!boost && state.settings.boostEscape && now > state.boostCooldownUntil) {
-      if (mode === 'escape' && best.minClear < TUNE.BOOST_CLEAR &&
+      if (mode === 'escape' && best.minClear >= 0 &&
+          best.minClear < TUNE.BOOST_CLEAR &&
           best.minWall > 60 && num(me.sct, 0) >= 3) {
         var nearest = modeDanger.nearest || danger.nearest;
         if (nearest && nearest.d < 480) {
@@ -1683,7 +1745,8 @@
     if (!boost && target && state.settings.boostEscape &&
         now > state.cutBoostCooldownUntil && mode === 'cut' &&
         target.d > 120 && target.d < 540 && num(me.sct, 0) >= 12 &&
-        best.minClear > 20 && best.minWall > 120) {
+        best.minClear > 20 && best.minWall > 120 &&
+        boostPathSafe(me, best.heading, ctx)) {
       var cutTo = Math.atan2(target.y - me.yy, target.x - me.xx);
       if (Math.cos(angleDiff(best.heading, cutTo)) > 0.05) {
         state.boostUntil = now + TUNE.CUT_BOOST_MS;
@@ -1697,7 +1760,8 @@
     if (!boost && target && state.settings.boostEscape && mode === 'chase' &&
         now > state.chaseBoostCooldownUntil && target.d > 140 && target.d < 680 &&
         target.speed < baseSpeed * 0.98 && num(me.sct, 0) >= 16 &&
-        best.minClear > 24 && best.minWall > 120) {
+        best.minClear > 24 && best.minWall > 120 &&
+        boostPathSafe(me, best.heading, ctx)) {
       var chaseTo = Math.atan2(target.y - me.yy, target.x - me.xx);
       if (Math.cos(angleDiff(best.heading, chaseTo)) > 0.15) {
         state.boostUntil = now + TUNE.CHASE_BOOST_MS;
@@ -1719,7 +1783,8 @@
         // The target's own body is part of minClear. A fixed 26-unit gate
         // therefore disables the boost exactly when the prey is close enough
         // to catch, leaving the trainer to follow at equal speed forever.
-        best.minClear > TUNE.DANGER_CLEAR - 2 && best.minWall > 120) {
+        best.minClear > TUNE.DANGER_CLEAR - 2 && best.minWall > 120 &&
+        boostPathSafe(me, best.heading, ctx)) {
       var huntFromT = Math.atan2(me.yy - target.y, me.xx - target.x);
       var huntLat = Math.abs(Math.sin(angleDiff(huntFromT, target.ang))) * target.d;
       var huntTo = Math.atan2(target.y - me.yy, target.x - me.xx);
@@ -2647,6 +2712,7 @@
     state.takeover = true;
     state.armed = true;
     state.sessionId = num(me.id, state.sessionId);
+    state.missingSince = 0;
     state.heading = num(me.ang, 0);
     state.boost = false;
     state.boostUntil = 0;
@@ -2681,6 +2747,7 @@
     var was = state.takeover;
     state.takeover = false;
     state.armed = !!keepArmed;
+    state.missingSince = 0;
     state.boost = false;
     state.boostUntil = 0;
     state.boostCooldownUntil = 0;
@@ -2720,6 +2787,7 @@
 
     var me = liveSelf();
     if (me) {
+      state.missingSince = 0;
       var id = num(me.id, 0);
       if (state.sessionId !== id) {
         state.sessionId = id;
@@ -2738,12 +2806,19 @@
         sampleSnapshot(me, now);
       }
     } else {
-      if (state.takeover) {
-        // A death or disconnect ends control. It never clicks Play.
+      // A transient disconnect can clear window.playing and window.slither
+      // for a few frames while the client reconnects to the same run. Do not
+      // release on the first missing frame: that leaves a healthy snake
+      // unsteered. A sustained loss is still treated as the session ending,
+      // and it never clicks Play.
+      if (!state.missingSince) state.missingSince = now;
+      var sessionGone = now - state.missingSince >= TUNE.SESSION_GRACE_MS;
+      if (state.takeover && sessionGone) {
         stopTakeover(state.settings.autoArm, 'session ended');
       }
-      if (state.sessionId !== null) {
+      if (state.sessionId !== null && (!state.takeover || sessionGone)) {
         state.sessionId = null;
+        state.missingSince = 0;
         state.snapshot = null;
         state.mode = 'idle';
         state.heading = 0;

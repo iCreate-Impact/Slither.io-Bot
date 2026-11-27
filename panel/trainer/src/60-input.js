@@ -148,6 +148,7 @@
     state.takeover = true;
     state.armed = true;
     state.sessionId = num(me.id, state.sessionId);
+    state.missingSince = 0;
     state.heading = num(me.ang, 0);
     state.boost = false;
     state.boostUntil = 0;
@@ -182,6 +183,7 @@
     var was = state.takeover;
     state.takeover = false;
     state.armed = !!keepArmed;
+    state.missingSince = 0;
     state.boost = false;
     state.boostUntil = 0;
     state.boostCooldownUntil = 0;

@@ -26,8 +26,12 @@
   };
 
   function mapArenaKey(arena) {
-    return Math.round(arena.cx) + ':' + Math.round(arena.cy) + ':' +
-      Math.round(arena.r);
+    // flux_grd can jitter by a few units as the client receives updates.
+    // The old one-unit key reset the grid on almost every frame, so live
+    // coverage never accumulated and the frontier never pulled the snake.
+    // Bucket the arena geometry instead; a real arena change still resets it.
+    return Math.round(arena.cx / 250) + ':' +
+      Math.round(arena.cy / 250) + ':' + Math.round(arena.r / 250);
   }
 
   function mapReset(me, arena, now) {

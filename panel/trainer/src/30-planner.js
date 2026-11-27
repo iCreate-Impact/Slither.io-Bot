@@ -266,6 +266,19 @@
     };
   }
 
+  function boostPathSafe(me, heading, ctx) {
+    // Every boost gate evaluates the chosen line at normal speed. Re-run the
+    // winner at boost speed before spending a burst, because a turn that is
+    // safe at base speed can put the head inside a body at 430 units/s. A
+    // boost is never a substitute for a bailout in an already-overlapping
+    // line.
+    var base = ctx.speed;
+    ctx.speed = TUNE.BOOST_SPEED;
+    var res = evaluatePath(me, heading, ctx);
+    ctx.speed = base;
+    return res.minClear >= 0 && res.minWall > 60;
+  }
+
   function nearestHead(me, heads) {
     var best = null;
     for (var i = 0; i < heads.length; i++) {
@@ -397,6 +410,26 @@
         state.escapeThreatId !== nearId;
       if (needNew) {
         var away = Math.atan2(me.yy - near.y, me.xx - near.x);
+        // A single nearest-head escape can run straight into the second
+        // snake that is closing from another side. Use a weighted flee vector
+        // from every non-target head, with boosted and larger heads counting
+        // more, then use the nearest head only for the head-on side choice.
+        var ax = 0;
+        var ay = 0;
+        var aw = 0;
+        for (i = 0; i < threats.heads.length; i++) {
+          var fh = threats.heads[i];
+          if (targetKey && String(fh.id) === targetKey) continue;
+          var fd = Math.sqrt(dist2(me.xx, me.yy, fh.x, fh.y));
+          if (fd < 1 || fd > TUNE.THREAT_RANGE) continue;
+          var fw = 1 / (80 + fd);
+          if (fh.boost) fw *= 1.45;
+          if (fh.sct > selfLen * 1.2) fw *= 1.25;
+          ax += ((me.xx - fh.x) / fd) * fw;
+          ay += ((me.yy - fh.y) / fd) * fw;
+          aw += fw;
+        }
+        if (aw > 0.001) away = Math.atan2(ay, ax);
         var toCenter = Math.atan2(arena.cy - me.yy, arena.cx - me.xx);
         var left = away + Math.PI / 2;
         var right = away - Math.PI / 2;
@@ -414,7 +447,8 @@
         // A head-on escape must leave the enemy's line, not orbit its nose.
         // Lock a perpendicular world heading for long enough to actually
         // break away; recomputing "away" every second just circles the head
-        // while the faster snake turns inside the loop.
+        // while the faster snake turns inside the loop. In a crowd, shorten
+        // the lock so the flee vector can follow the nearest opening.
         var escapeAngle = away;
         if (isBehind) {
           escapeAngle = away + side * 0.95;
@@ -426,7 +460,8 @@
         }
         state.escapeHeading = escapeAngle;
         state.escapeThreatId = nearId;
-        state.escapeUntil = now + (headOn ? 1800 : 1100);
+        state.escapeUntil = now +
+          (headOn ? 1800 : (modeDanger.nearby > 3 ? 650 : 1100));
       }
       evadeHeading = state.escapeHeading;
     } else {
@@ -452,7 +487,7 @@
       openWeight = nearbyHeads <= 1 ? 0 :
         clamp(0.04 + (nearbyHeads - 1) * 0.18 + danger.level * 0.35, 0, 1);
       if (target) openWeight *= 0.3;
-      if (modeDanger.urgent) openWeight *= 0.2;
+      if (modeDanger.urgent) openWeight *= modeDanger.crowd > 2 ? 0.65 : 0.2;
     } else {
       state.migrateHeading = null;
       state.migrateUntil = 0;
@@ -569,12 +604,16 @@
     }
 
     var boost = now < state.boostUntil;
-    if (boost && best.minWall < 60) {
+    if (boost && (best.minClear < 0 || best.minWall < 60)) {
+      // A burst widens the turn radius. If the planned line is already at or
+      // past the safety envelope, cancel the boost and give the planner the
+      // sharper base-speed turn next frame.
       boost = false;
       state.boostUntil = 0;
     }
     if (!boost && state.settings.boostEscape && now > state.boostCooldownUntil) {
-      if (mode === 'escape' && best.minClear < TUNE.BOOST_CLEAR &&
+      if (mode === 'escape' && best.minClear >= 0 &&
+          best.minClear < TUNE.BOOST_CLEAR &&
           best.minWall > 60 && num(me.sct, 0) >= 3) {
         var nearest = modeDanger.nearest || danger.nearest;
         if (nearest && nearest.d < 480) {
@@ -598,7 +637,8 @@
     if (!boost && target && state.settings.boostEscape &&
         now > state.cutBoostCooldownUntil && mode === 'cut' &&
         target.d > 120 && target.d < 540 && num(me.sct, 0) >= 12 &&
-        best.minClear > 20 && best.minWall > 120) {
+        best.minClear > 20 && best.minWall > 120 &&
+        boostPathSafe(me, best.heading, ctx)) {
       var cutTo = Math.atan2(target.y - me.yy, target.x - me.xx);
       if (Math.cos(angleDiff(best.heading, cutTo)) > 0.05) {
         state.boostUntil = now + TUNE.CUT_BOOST_MS;
@@ -612,7 +652,8 @@
     if (!boost && target && state.settings.boostEscape && mode === 'chase' &&
         now > state.chaseBoostCooldownUntil && target.d > 140 && target.d < 680 &&
         target.speed < baseSpeed * 0.98 && num(me.sct, 0) >= 16 &&
-        best.minClear > 24 && best.minWall > 120) {
+        best.minClear > 24 && best.minWall > 120 &&
+        boostPathSafe(me, best.heading, ctx)) {
       var chaseTo = Math.atan2(target.y - me.yy, target.x - me.xx);
       if (Math.cos(angleDiff(best.heading, chaseTo)) > 0.15) {
         state.boostUntil = now + TUNE.CHASE_BOOST_MS;
@@ -634,7 +675,8 @@
         // The target's own body is part of minClear. A fixed 26-unit gate
         // therefore disables the boost exactly when the prey is close enough
         // to catch, leaving the trainer to follow at equal speed forever.
-        best.minClear > TUNE.DANGER_CLEAR - 2 && best.minWall > 120) {
+        best.minClear > TUNE.DANGER_CLEAR - 2 && best.minWall > 120 &&
+        boostPathSafe(me, best.heading, ctx)) {
       var huntFromT = Math.atan2(me.yy - target.y, me.xx - target.x);
       var huntLat = Math.abs(Math.sin(angleDiff(huntFromT, target.ang))) * target.d;
       var huntTo = Math.atan2(target.y - me.yy, target.x - me.xx);

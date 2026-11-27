@@ -122,6 +122,10 @@
     MAP_FRONTIER_MS: 700,
     MAP_TARGET_DIST: 300,
     MAP_WALL_PAD: 500,
+    // A live tab can briefly lose window.playing/window.slither while the
+    // game reconnects or swaps a server. Releasing on the first missing frame
+    // leaves a healthy snake unsteered; wait for a sustained loss instead.
+    SESSION_GRACE_MS: 2500,
     SAFE_BONUS: 2000,
     UNSAFE_PENALTY: 2000
   };
@@ -218,6 +222,7 @@
     hidden: false,
     minimized: false,
     sessionId: null,
+    missingSince: 0,
     mode: 'idle',
     heading: 0,
     clearance: null,

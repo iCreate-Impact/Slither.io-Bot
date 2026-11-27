@@ -271,6 +271,35 @@ def main():
               outs["map"])
         check("ui boost off", s["boostEscape"] is False and outs["boost"] is False, json.dumps(outs))
 
+        map_before = page.evaluate(
+            """() => ({
+              cells: window.__slitherTrainer.state.mapCells,
+              visited: window.__slitherTrainer.state.mapVisited,
+              samples: window.__slitherTrainer.state.mapSamples
+            })"""
+        )
+        page.evaluate(
+            """() => {
+              window.flux_grd += 31;
+              window.real_flux_grd += 17;
+            }"""
+        )
+        page.wait_for_timeout(320)
+        map_after = page.evaluate(
+            """() => ({
+              cells: window.__slitherTrainer.state.mapCells,
+              visited: window.__slitherTrainer.state.mapVisited,
+              samples: window.__slitherTrainer.state.mapSamples
+            })"""
+        )
+        check(
+            "ui map arena jitter keeps grid",
+            map_after["samples"] > map_before["samples"] and
+            map_after["visited"] >= map_before["visited"] and
+            map_after["cells"] == map_before["cells"],
+            json.dumps({"before": map_before, "after": map_after}),
+        )
+
         density = page.evaluate(
             """() => {
               const foods = [

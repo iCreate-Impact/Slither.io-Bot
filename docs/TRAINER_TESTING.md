@@ -202,8 +202,8 @@ Individual suites:
 | Command | Checks |
 | --- | --- |
 | `python panel/trainer/tests/test_modes.py` | 31 closed-loop scenarios: walls, head-on, crossing, hunting, peer/equal prey, evasive pressure, tail-bait, corpse feast, map exploration, radar, and four body regressions. |
-| `python panel/trainer/tests/test_takeover.py` | 29 takeover/release, death handling, handler restoration and input-shield checks. |
-| `python panel/trainer/tests/test_hunt_radar.py` | 41 hunt/cut/kill, feast, radar range/drawing, map/Explore and panel-control checks. |
+| `python panel/trainer/tests/test_takeover.py` | 31 takeover/release, transient reconnect, death handling, handler restoration and input-shield checks. |
+| `python panel/trainer/tests/test_hunt_radar.py` | 42 hunt/cut/kill, feast, radar range/drawing, map/Explore, arena-jitter and panel-control checks. |
 | `python panel/trainer/tests/bench.py` | Planner FPS with five enemies and 120 points each. |
 | `python panel/trainer/tests/bench.py --enemies 24 --segments 140` | Crowded-scene FPS stress test. |
 
@@ -230,9 +230,9 @@ Reference environment: Windows, Playwright 1.59.0, headless mode. The suite was
 run with the installed Chrome 155 channel and rerun with Edge 158.0.4370.45.
 
 ```text
-test_modes.py       31/31 modes passed (installed default browser)
-test_takeover.py    29/29 checks passed (installed default browser)
-test_hunt_radar.py  41/41 checks passed (installed default browser)
+test_modes.py       31/31 modes passed (Chrome and Edge)
+test_takeover.py    31/31 checks passed (Chrome and Edge)
+test_hunt_radar.py  42/42 checks passed (Chrome and Edge)
 bench.py            60 fps, 5 enemies x 120 points (Chrome and Edge)
 bench.py --enemies 24 --segments 140
                     60 fps, 24 enemies x 140 points (Chrome and Edge)
@@ -368,9 +368,9 @@ offline pages cannot reproduce the live server:
 - No live v0.4.0 result is recorded yet. The v0.3.0 live best was rank `70` of
   `319`, not rank `1`, and did not confirm a live kill. An equal-speed target
   that flees perfectly can still avoid a body trap in open space.
-- The v0.4.0 modes and panel changes were validated in the installed default
-  browser. Earlier v0.3.0 suites covered both installed Chrome and Edge; live
-  Edge injection needs a different loader or an already-open page.
+- The v0.4.0 modes and panel changes passed in both installed Chrome and Edge.
+  Live Edge injection still needs a different loader or an already-open page
+  because the installed Edge channel blocks the local script fetch.
 - Bots may violate the game's terms of service. Use the trainer sparingly and
   only on a run you started yourself.
 

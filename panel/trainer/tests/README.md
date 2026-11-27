@@ -47,10 +47,10 @@ machine.
 # 31 closed-loop collision, wall, hunting, peer/equal, tail-bait, map, body, feast and radar scenarios
 python panel/trainer/tests/test_modes.py
 
-# 29 takeover, release, death-handling and input-shield checks
+# 31 takeover, release, transient reconnect, death-handling and input-shield checks
 python panel/trainer/tests/test_takeover.py
 
-# 41 hunt, corpse-feast, radar, map/Explore and panel-control checks
+# 42 hunt, corpse-feast, radar, map/Explore and panel-control checks
 python panel/trainer/tests/test_hunt_radar.py
 
 # planner FPS with a synthetic crowd
@@ -112,14 +112,14 @@ accepts a larger `--seconds` value.
 
 ## Reference result
 
-Validated with Playwright 1.59.0, headless mode, using the installed default
-browser:
+Validated with Playwright 1.59.0, headless mode, using the installed Chrome
+and Edge channels:
 
 ```text
-test_modes.py       31/31 modes passed (installed default browser)
-test_takeover.py    29/29 checks passed (installed default browser)
-test_hunt_radar.py  41/41 checks passed (installed default browser)
-bench.py             60 fps, 5 enemies x 120 points
+test_modes.py       31/31 modes passed (Chrome and Edge)
+test_takeover.py    31/31 checks passed (Chrome and Edge)
+test_hunt_radar.py  42/42 checks passed (Chrome and Edge)
+bench.py             60 fps, 5 enemies x 120 points (Chrome and Edge)
 ```
 
 Console and page errors are treated as failures. The closed-loop suite also

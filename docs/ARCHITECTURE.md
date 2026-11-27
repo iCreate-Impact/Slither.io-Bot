@@ -206,7 +206,7 @@ The offline suite is test-only and never contacts slither.io:
 python panel/trainer/tests/run_all.py
 ```
 
-It covers 31 closed-loop modes, 29 takeover/input checks, 41 hunt/radar/UI
+It covers 31 closed-loop modes, 31 takeover/input checks, 42 hunt/radar/UI
 checks, and a 5-enemy FPS benchmark. See
 [`TRAINER_TESTING.md`](TRAINER_TESTING.md) and
 [`TRAINER_MODULES.md`](TRAINER_MODULES.md).

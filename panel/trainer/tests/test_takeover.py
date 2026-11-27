@@ -171,9 +171,35 @@ def main():
         check("threat counted", s["threats"] >= 1, str(s["threats"]))
         check("mode set", s["mode"] in ("avoid", "danger", "escape", "farm", "cruise", "hunt", "coil", "cut", "feast"), s["mode"])
 
-        # Death: stop, arm, never click Play.
+        # A server reconnect can briefly clear the client's playing flag and
+        # snake reference. That must not release a healthy run. Hold the loss
+        # inside the grace window, then restore the same session.
+        page.evaluate(
+            """() => {
+              window.__savedRun = {playing: window.playing, slither: window.slither};
+              window.playing = false;
+              window.slither = null;
+              setTimeout(() => {
+                window.slither = window.__savedRun.slither;
+                window.playing = true;
+              }, 900);
+            }"""
+        )
+        page.wait_for_timeout(600)
+        s = state(page)
+        check("transient loss keeps takeover", s["takeover"], json.dumps(s))
+        page.wait_for_timeout(1000)
+        s = state(page)
+        check(
+            "reconnect keeps session",
+            s["takeover"] and s["sessionId"] == 1,
+            json.dumps(s),
+        )
+
+        # Death: stop, arm, never click Play. A sustained loss is still a
+        # session end; wait past the grace window.
         page.evaluate("() => { window.slither.id = -1234; }")
-        page.wait_for_timeout(350)
+        page.wait_for_timeout(3000)
         s = state(page)
         check("death stops takeover", not s["takeover"])
         check("death leaves armed", s["armed"])

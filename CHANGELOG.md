@@ -45,11 +45,14 @@ Results are per-run displayed scores, not cumulative across restarts. See [docs/
 
 ### Validated
 
-- Closed-loop suite: `31/31` modes passed in the installed default browser,
+- Closed-loop suite: `31/31` modes passed in installed Chrome and Edge,
   including the new peer, equal-tail and map modes, with zero simulated
   collisions.
-- Takeover/input-shield suite: `29/29` checks passed.
-- Hunt/radar/UI suite: `41/41` checks passed, including the new Explore\n  control, map line and food-density weighting.
+- Takeover/input-shield suite: `31/31` checks passed in Chrome and Edge,
+  including transient reconnect retention and grace-period death handling.
+- Hunt/radar/UI suite: `42/42` checks passed in Chrome and Edge, including the
+  new Explore control, map line, food-density weighting and arena-jitter map
+  retention.
 - Benchmark: `60 fps` with five enemies x `120` points.
 - The production trainer still never launches a browser, navigates, clicks
   **Play**, reconnects, or creates a run.
