@@ -128,6 +128,23 @@
     var peerPrey = makeEnemy(2, 16384 + 330, 16384 + 20, Math.PI / 2, 4.8, 52);
     peerPrey.noHome = true;
     enemies = [peerPrey];
+  } else if (mode === "hunt_evasive") {
+    // Live prey does not drive in a straight line. It turns away from the
+    // player and refuses to run into a body, which is the case a straight
+    // line test never exercises.
+    selfMax = 60;
+    self.sct = 60;
+    var evasivePrey = makeEnemy(2, 16384 + 330, 16384 + 20, Math.PI / 2, 5.5, 20);
+    evasivePrey.noHome = true;
+    evasivePrey.evasive = true;
+    enemies = [evasivePrey];
+  } else if (mode === "hunt_evasive_peer") {
+    selfMax = 60;
+    self.sct = 60;
+    var evasivePeer = makeEnemy(2, 16384 + 330, 16384 + 20, Math.PI / 2, 5.0, 52);
+    evasivePeer.noHome = true;
+    evasivePeer.evasive = true;
+    enemies = [evasivePeer];
   } else if (mode === "hunt_bigger") {
     selfMax = 40;
     self.sct = 40;
@@ -303,9 +320,31 @@
     for (var e = 0; e < enemies.length; e++) {
       var o = enemies[e];
       if (!o.sp || o.dead) continue;
-      if (!o.noHome) {
+      var want;
+      if (o.evasive) {
+        // Run from the player's head, but also steer away from its body.
+        // A pure away vector lets the trainer herd prey in a circle; the
+        // repulsion makes the prey contest the actual body trap.
+        var flee = Math.atan2(o.yy - self.yy, o.xx - self.xx);
+        var vx = Math.cos(flee);
+        var vy = Math.sin(flee);
+        for (var q = 0; q < self.pts.length; q += 3) {
+          var bp = self.pts[q];
+          var bdx = o.xx - bp.xx;
+          var bdy = o.yy - bp.yy;
+          var bd = Math.hypot(bdx, bdy);
+          if (bd > 1 && bd < 240) {
+            var push = (1 - bd / 240) * 2.2;
+            vx += bdx / bd * push;
+            vy += bdy / bd * push;
+          }
+        }
+        want = Math.atan2(vy, vx);
+      } else if (!o.noHome) {
         // Home toward the player so head-on and crossing scenarios stay honest.
-        var want = Math.atan2(self.yy - o.yy, self.xx - o.xx);
+        want = Math.atan2(self.yy - o.yy, self.xx - o.xx);
+      }
+      if (want !== undefined) {
         var d = (want - o.ang + Math.PI) % (Math.PI * 2);
         if (d < 0) d += Math.PI * 2;
         d -= Math.PI;

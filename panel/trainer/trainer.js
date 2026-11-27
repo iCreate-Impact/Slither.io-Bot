@@ -83,8 +83,8 @@
     CUT_BOOST_COOLDOWN: 3400,
     CHASE_BOOST_MS: 280,
     CHASE_BOOST_COOLDOWN: 2600,
-    HUNT_BOOST_MS: 500,
-    HUNT_BOOST_COOLDOWN: 1000,
+    HUNT_BOOST_MS: 700,
+    HUNT_BOOST_COOLDOWN: 450,
     PREV_BONUS: 10,
     RADAR_RANGE: 2400,
     HUNT_MIN_LEN: 6,
@@ -222,6 +222,8 @@
     huntTargetId: null,
     huntTarget: null,
     huntUntil: 0,
+    huntCooldownId: null,
+    huntCooldownUntil: 0,
     kills: 0,
     corpse: null,
     deadIds: {},
@@ -700,10 +702,23 @@
       byId[threats.snakes[i].id] = threats.snakes[i];
     }
     var current = state.huntTargetId ? byId[String(state.huntTargetId)] : null;
-    if (current && now < state.huntUntil && current.d < TUNE.HUNT_MAX_DIST * 1.3 &&
+    var currentCooling = current && state.huntCooldownId &&
+      String(state.huntCooldownId) === String(current.id) &&
+      now < state.huntCooldownUntil;
+    if (current && !currentCooling && now < state.huntUntil &&
+        current.d < TUNE.HUNT_MAX_DIST * 1.3 &&
         current.sct <= selfLen * 0.98) {
-      state.huntTarget = current;
-      return current;
+      var currentToT = Math.atan2(current.y - me.yy, current.x - me.xx);
+      var currentAway = Math.cos(angleDiff(current.ang, currentToT));
+      // A target that boosts or turns into a faster runner is no longer a
+      // kill; it is a chase that drags the trainer across the map. Drop the
+      // lock before that happens, not after thirty seconds of pursuit.
+      var uncatchable = (current.boost && current.d > 200) ||
+        (currentAway > 0.55 && current.speed >= selfSpeed * 0.98);
+      if (!uncatchable) {
+        state.huntTarget = current;
+        return current;
+      }
     }
 
     var aggression = clamp(num(state.settings.aggression, 1), 0, 2);
@@ -715,6 +730,11 @@
     var best = null;
     for (i = 0; i < threats.snakes.length; i++) {
       var s = threats.snakes[i];
+      // A target that just forced us to bail out at head-contact range gets
+      // a short cooldown. Reacquiring it immediately made the trainer turn
+      // straight back into the body it had just escaped.
+      if (state.huntCooldownId && now < state.huntCooldownUntil &&
+          String(state.huntCooldownId) === String(s.id)) continue;
       if (s.sct < 4 || s.sct > selfLen * maxRatio) continue;
       if (s.d < TUNE.HUNT_MIN_DIST || s.d > maxDist) continue;
       if (s.boost && s.d > 260) continue;
@@ -729,9 +749,11 @@
       if (targetWall < 360) continue;
       var toTarget = Math.atan2(s.y - me.yy, s.x - me.xx);
       var away = Math.cos(angleDiff(s.ang, toTarget));
-      // A smaller snake running directly away at the same speed cannot be
-      // caught without a risky boost. Ignore it and look for a crossing.
-      if (away > 0.55 && s.speed >= selfSpeed * 0.9) continue;
+      // A snake running directly away at our speed or faster cannot be
+      // caught without giving up the farming line, and following it drags
+      // the trainer across the map for nothing. Slower runners and crossing
+      // snakes stay on the list; those are the catchable kills.
+      if (away > 0.55 && s.speed >= selfSpeed * 0.98) continue;
       var ratio = s.sct / Math.max(1, selfLen);
       var score = 50 + s.sct * 1.4 + (maxDist - s.d) * 0.045 -
         ratio * 28 - crowd * 26 - (s.boost ? 35 : 0);
@@ -918,6 +940,9 @@
         // instead of rear-ending its tail, then cut across when we are ahead.
         var chaseLead = clamp(td / Math.max(180, ctx.speed + htSpeed), 0.25, 1.6);
         var sideOff = ht.r + selfR + safety + 30;
+        // Close to a fleeing snake, the normal standoff is too narrow to
+        // clear its tail. Open the flank so a boost can actually overtake.
+        if (td < 420) sideOff *= 1.5;
         var chaseX = htX + Math.cos(htAng) * htSpeed * chaseLead -
           Math.sin(htAng) * sideOff * ctx.huntSide;
         var chaseY = htY + Math.sin(htAng) * htSpeed * chaseLead +
@@ -1037,13 +1062,27 @@
 
     var target = selectHuntTarget(me, threats, arena, now);
     var selfLen = Math.max(0, num(me.sct, 0));
+    if (target && target.d < selfR + snakeRadius(target) + 70 &&
+        (target.sct >= Math.max(16, selfLen * 0.75) || target.boost)) {
+      // Head-to-head at this range is a coin flip: our head can touch the
+      // target body just as easily as its head can touch ours. Bail out,
+      // let the target run into the body behind us, and do not reacquire it
+      // for a moment. A genuinely tiny snake has a short body and cannot
+      // cover the same distance, so the close cut is still worth taking.
+      state.huntCooldownId = String(target.id);
+      state.huntCooldownUntil = now + 1200;
+      target = null;
+      state.huntTarget = null;
+      state.huntTargetId = null;
+      state.boostUntil = 0;
+    }
     var modeDanger = danger;
     if (target) {
       // Ignore the target itself when deciding whether hunting is safe.
       // Otherwise an incoming smaller snake would always look like danger,
       // and the trainer would flee instead of cutting across its nose.
       modeDanger = assessDanger(me, threats, arena, target.id);
-      var keepSmall = target.sct < selfLen * 0.8 && target.d < 520;
+      var keepSmall = target.sct < selfLen * 0.65 && target.d < 380;
       if ((modeDanger.urgent || modeDanger.level > 0.58) && !keepSmall) {
         target = null;
         state.huntTarget = null;
@@ -1055,9 +1094,14 @@
           (target.y - me.yy) * Math.sin(target.ang);
         if (target.d < 340 && along < -30) target.maneuver = 'cut';
         else if (target.d < 420 && facing < -0.1) target.maneuver = 'cut';
+        else if (target.d < 240 && facing > 0.4) target.maneuver = 'cut';
         else if (facing > 0.3) target.maneuver = 'chase';
-        else if (target.d < 460) target.maneuver = 'coil';
-        else target.maneuver = 'hunt';
+        else if (target.d < 460) {
+          // A slower target cannot outrun the cut; circling it with coil
+          // only burns time. Equal or faster prey is the case where the
+          // tangent coil actually helps bring the body around.
+          target.maneuver = target.speed < baseSpeed * 0.95 ? 'cut' : 'coil';
+        } else target.maneuver = 'hunt';
         target.huntSide = chooseHuntSide(me, target, arena, threats.heads);
         var fromTarget = Math.atan2(me.yy - target.y, me.xx - target.x);
         var lateral = Math.sin(angleDiff(fromTarget, target.ang));
@@ -1073,12 +1117,22 @@
         state.huntTarget = target;
       }
     }
+    if (modeDanger.chase) state.chaseUntil = now + 1600;
+    var chaseActive = now < state.chaseUntil;
     if (chaseActive) {
-      modeDanger.level = Math.max(modeDanger.level, 0.62);
-      if (target) {
-        target = null;
-        state.huntTarget = null;
-        state.huntTargetId = null;
+      // A small target can be finished quickly, but only when the snake
+      // chasing us is still far away. Ignoring a close chaser to chase a
+      // minnow is how a short run turns into a death.
+      var chaser = modeDanger.nearest || danger.nearest;
+      var committedSmall = target && target.sct < selfLen * 0.7 &&
+        target.d < 320 && (!chaser || chaser.d > 650);
+      if (!committedSmall) {
+        modeDanger.level = Math.max(modeDanger.level, 0.62);
+        if (target) {
+          target = null;
+          state.huntTarget = null;
+          state.huntTargetId = null;
+        }
       }
     }
 
@@ -1240,13 +1294,20 @@
     else if (state.corpse && state.settings.foodPull > 0) mode = 'feast';
     else if (best.foodScore > 0.5) mode = 'farm';
 
-    // A hunt that is already scraping a body is not a hunt; it is a
-    // survival problem. Drop the target and let clearance lead.
-    if (target && best.minClear < TUNE.DANGER_CLEAR) {
+    // The target's own body is part of minClear, so a normal close chase
+    // routinely sits below DANGER_CLEAR. Dropping the hunt at the full
+    // threshold turned every equal-speed pursuit into a stalemate. A slower
+    // target cannot ram us, so press that kill all the way in; against an
+    // equal or faster snake, abandon a genuinely tight line and cancel the
+    // hunt boost so the trainer cannot coast into the body.
+    var closeLimit = target && target.speed < baseSpeed * 0.95 ?
+      0 : TUNE.DANGER_CLEAR * 0.5;
+    if (target && best.minClear < closeLimit) {
       mode = 'danger';
       target = null;
       state.huntTarget = null;
       state.huntTargetId = null;
+      state.boostUntil = 0;
     }
 
     var boost = now < state.boostUntil;
@@ -1278,7 +1339,7 @@
     // only when the current path is clear; it is never used to chase food.
     if (!boost && target && state.settings.boostEscape &&
         now > state.cutBoostCooldownUntil && mode === 'cut' &&
-        target.d > 120 && target.d < 540 && num(me.sct, 0) >= 24 &&
+        target.d > 120 && target.d < 540 && num(me.sct, 0) >= 12 &&
         best.minClear > 20 && best.minWall > 120) {
       var cutTo = Math.atan2(target.y - me.yy, target.x - me.xx);
       if (Math.cos(angleDiff(best.heading, cutTo)) > 0.05) {
@@ -1308,13 +1369,28 @@
     if (!boost && target && state.settings.boostEscape && mode !== 'escape' &&
         now > state.huntBoostCooldownUntil &&
         (mode === 'cut' || mode === 'chase' || mode === 'coil' || mode === 'hunt') &&
-        target.d > 110 && target.d < 620 &&
+        target.d > 110 && target.d < TUNE.HUNT_MAX_DIST * 1.15 &&
         target.speed < baseSpeed * 1.06 &&
         target.sct <= num(me.sct, 0) * 0.92 &&
-        num(me.sct, 0) >= 12 &&
-        best.minClear > 26 && best.minWall > 120) {
+        num(me.sct, 0) >= 8 &&
+        // The target's own body is part of minClear. A fixed 26-unit gate
+        // therefore disables the boost exactly when the prey is close enough
+        // to catch, leaving the trainer to follow at equal speed forever.
+        best.minClear > TUNE.DANGER_CLEAR - 2 && best.minWall > 120) {
+      var huntFromT = Math.atan2(me.yy - target.y, me.xx - target.x);
+      var huntLat = Math.abs(Math.sin(angleDiff(huntFromT, target.ang))) * target.d;
       var huntTo = Math.atan2(target.y - me.yy, target.x - me.xx);
-      if (Math.cos(angleDiff(best.heading, huntTo)) > 0.1) {
+      var huntAlign = Math.cos(angleDiff(best.heading, huntTo));
+      // Directly behind a close, equal-speed snake, boosting straight at it
+      // only pushes our head into its tail. A slower target is still safe to
+      // run down. Against an equal-speed kiter, boost only when the planned
+      // line is visibly off the tail and there is enough clearance to pass.
+      var tailRisk = huntLat < 45 && target.d < 300 &&
+        target.speed > baseSpeed * 0.95;
+      var flankBoost = !tailRisk ||
+        (huntAlign < 0.97 && target.d > 190 && best.minClear > TUNE.DANGER_CLEAR);
+      if (flankBoost && huntAlign > -0.6 &&
+          (target.d > 260 || huntLat > 70 || huntAlign < 0.86)) {
         state.boostUntil = now + TUNE.HUNT_BOOST_MS;
         state.huntBoostCooldownUntil = now + TUNE.HUNT_BOOST_MS + TUNE.HUNT_BOOST_COOLDOWN;
         boost = true;
@@ -2160,6 +2236,8 @@
     state.huntTargetId = null;
     state.huntTarget = null;
     state.huntUntil = 0;
+    state.huntCooldownId = null;
+    state.huntCooldownUntil = 0;
     state.cutBoostCooldownUntil = 0;
     state.chaseBoostCooldownUntil = 0;
     state.huntBoostCooldownUntil = 0;
@@ -2343,3 +2421,4 @@
 
   boot();
 })();
+

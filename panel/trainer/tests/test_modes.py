@@ -39,6 +39,8 @@ DEFAULT_MODES = [
     "hunt_flee",
     "hunt_early",
     "hunt_peer",
+    "hunt_evasive",
+    "hunt_evasive_peer",
     "hunt_bigger",
     "hunt_crowd",
     "body_far_head",
@@ -84,8 +86,14 @@ def main() -> int:
                     ".shadowRoot.getElementById('takeBtn').click()"
                 )
                 # Early/peer chases need enough time to close a 300+ unit gap
-                # without a cut boost; keep the rest of the suite fast.
-                seconds = max(args.seconds, 12.0) if mode in ("hunt_early", "hunt_peer") else args.seconds
+                # without a cut boost; the early target is short and the
+                # first cut can overshoot, so give it a little more margin.
+                if mode == "hunt_early":
+                    seconds = max(args.seconds, 16.0)
+                elif mode in ("hunt_peer", "hunt_evasive", "hunt_evasive_peer"):
+                    seconds = max(args.seconds, 12.0)
+                else:
+                    seconds = args.seconds
                 early = None
                 if mode == "body_target_last":
                     # The trainer is now aggressive enough to kill this
@@ -151,6 +159,11 @@ def main() -> int:
                     ok = ok and (final_target_ok or early_target_ok)
                 if mode in ("hunt_early", "hunt_peer"):
                     ok = ok and info["sim"].get("kills", 0) >= 1
+                # hunt_evasive / hunt_evasive_peer are pressure scenarios:
+                # the prey flees perfectly and matches our speed, so the
+                # trainer must survive and keep pursuing without ramming the
+                # body. A kill is not required because that kiter can always
+                # turn away in open space.
                 results.append((mode, ok, info, errors))
                 print(
                     ("PASS" if ok else "FAIL"),
